@@ -1,0 +1,22 @@
+{
+  "name": "plugins",
+  "version": "1.0.0",
+  "description": "daemonitor plugins",
+  "main": "index.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@8.2.0",
+  "dependencies": {
+    "dotenv": "^16.0.3",
+    "ewelink-api": "^3.1.1",
+    "node-machine-id": "^1.1.12",
+    "ohmyfetch": "^0.4.21",
+    "pm2": "^5.1.0",
+    "string-to-color": "^2.2.2",
+    "ts-node": "^10.9.1",
+    "tsconfig-paths": "^4.2.0"
+  }
+}
