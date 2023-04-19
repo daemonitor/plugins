@@ -1,5 +1,5 @@
 {
-  "name": "plugins",
+  "name": "@daemonitor/plugins",
   "version": "1.0.0",
   "description": "daemonitor plugins",
   "main": "index.ts",
@@ -18,5 +18,14 @@
     "string-to-color": "^2.2.2",
     "ts-node": "^10.9.1",
     "tsconfig-paths": "^4.2.0"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daemonitor/plugins.git"
+  },
+  "bugs": {
+    "url": "https://github.com/daemonitor/plugins/issues"
+  },
+  "homepage": "https://github.com/daemonitor/plugins#readme"
 }
