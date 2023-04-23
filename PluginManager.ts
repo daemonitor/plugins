@@ -1,13 +1,13 @@
-import MonitoringPluginBase from "~/lib/MonitoringPluginBase"
-import loadPlugins from "~/lib/PluginLoader"
 import { IConnector } from "~/lib/interfaces/Connector"
+import { MonitoringPlugin } from "@daemonitor/plugins"
 import ConfigProvider from "~/lib/providers/ConfigProvider"
 
-class PluginManager {
+
+export default class PluginManager {
 
     static API_CONNECTIONS: IConnector[] = []
-    private availablePlugins: MonitoringPluginBase[]
-    private activePlugins: MonitoringPluginBase[]
+    private availablePlugins: MonitoringPlugin[]
+    private activePlugins: MonitoringPlugin[]
 
     constructor() {
 
@@ -77,4 +77,3 @@ class PluginManager {
     }
 }
 
-export default PluginManager
