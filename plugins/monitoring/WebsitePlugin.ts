@@ -1,4 +1,4 @@
-import MonitoringPlugin from "~/lib/plugins/MonitoringPlugin"
+import { MonitoringPlugin } from "~/index"
 
 class WebSitePlugin extends MonitoringPlugin {
     constructor() {

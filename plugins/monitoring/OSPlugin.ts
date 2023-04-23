@@ -11,9 +11,10 @@ import {
     type,
     uptime
 } from "os"
-import MonitoringPlugin from "~/lib/plugins/MonitoringPlugin"
+import { MonitoringPlugin } from "~/index"
 
-class OSPlugin extends MonitoringPlugin {
+
+export class OSPlugin extends MonitoringPlugin {
     constructor() {
         super("os", "OS", "OS Monitoring Plugin")
     }
@@ -60,5 +61,3 @@ class OSPlugin extends MonitoringPlugin {
         clearInterval(this.refreshTimer)
     }
 }
-
-export default OSPlugin

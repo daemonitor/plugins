@@ -1,7 +1,7 @@
 import * as pm2 from "pm2"
-import MonitoringPluginBase from "~/lib/MonitoringPluginBase"
+import { MonitoringPlugin } from "~/index"
 
-class PM2Plugin extends MonitoringPluginBase {
+class PM2Plugin extends MonitoringPlugin {
     constructor() {
         super("pm2", "PM2", "PM2 Monitoring Plugin")
     }
