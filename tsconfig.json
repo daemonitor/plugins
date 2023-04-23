@@ -1,6 +1,8 @@
 {
   "ts-node": {
-    "require": ["tsconfig-paths/register"]
+    "require": [
+      "tsconfig-paths/register"
+    ]
   },
   "compilerOptions": {
     "module": "NodeNext",
@@ -12,12 +14,22 @@
     "target": "esnext",
     "baseUrl": ".",
     "paths": {
-      "~/*": ["*"]
-    }
+      "~/*": [
+        "*"
+      ]
+    },
+    "typeRoots": [
+      "./node_modules/@types",
+      "./types"
+    ],
+    "esModuleInterop": true
   },
   "include": [
     "**/*.ts",
-    "../daemonitor-frontend/.nuxt/types/imports.d.ts"
+    "../daemonitor-frontend/.nuxt/types/imports.d.ts",
+    "../frontend/.nuxt/types/imports.d.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }
