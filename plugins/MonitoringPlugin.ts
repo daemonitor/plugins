@@ -1,5 +1,5 @@
-import BasePlugin from "~/lib/plugins/BasePlugin"
-import PluginManager from "~/lib/plugins/monitoring/PluginManager"
+import BasePlugin from "~/plugins/BasePlugin"
+import PluginManager from "~/PluginManager"
 
 abstract class MonitoringPlugin extends BasePlugin {
     static currentPluginIndex = 0
