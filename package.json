@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "description": "daemonitor plugins",
   "main": "index.ts",
+  "types": "types/index.d.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "type": "module",
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@8.2.0",
@@ -17,9 +19,9 @@
     "pm2": "^5.1.0",
     "string-to-color": "^2.2.2",
     "ts-node": "^10.9.1",
+    "@daemonitor/common": "file:../common",
     "tsconfig-paths": "^4.2.0"
   },
-  "devDependencies": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/daemonitor/plugins.git"
