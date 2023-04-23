@@ -1,4 +1,4 @@
-import ConfigProvider from "~/lib/providers/ConfigProvider"
+import PluginConfigProvider from "./PluginConfigProvider"
 
 abstract class BasePlugin {
     static currentPluginIndex = 0
@@ -8,7 +8,7 @@ abstract class BasePlugin {
     protected config: any
 
     protected constructor(alias: string, name: string, description: string) {
-        this.config = ConfigProvider.get(alias)
+        this.config = PluginConfigProvider.get(alias)
         this.name = name
         this.description = description
     }
