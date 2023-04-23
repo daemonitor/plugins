@@ -1,13 +1,12 @@
-import { IConnector } from "~/lib/interfaces/Connector"
-import { MonitoringPlugin } from "@daemonitor/plugins"
-import ConfigProvider from "~/lib/providers/ConfigProvider"
-
+import { PluginLoader } from "~/index"
+import { AppConfigProvider, IConnector } from "@daemonitor/common"
+import { BasePlugin, MonitoringPlugin } from "@daemonitor/plugins"
 
 export default class PluginManager {
 
     static API_CONNECTIONS: IConnector[] = []
-    private availablePlugins: MonitoringPlugin[]
-    private activePlugins: MonitoringPlugin[]
+    private availablePlugins: Array<MonitoringPlugin | BasePlugin>
+    private activePlugins: Array<MonitoringPlugin | BasePlugin>
 
     constructor() {
 
@@ -20,7 +19,7 @@ export default class PluginManager {
     }
 
     async loadPlugins(): Promise<void> {
-        return await loadPlugins().then(plugins => {
+        return await PluginLoader.loadPlugins().then(plugins => {
             if (!plugins) {
                 throw new Error("Failed to load plugins.")
             } else if (plugins.length === 0) {
@@ -38,8 +37,9 @@ export default class PluginManager {
 
     async setupAll(): Promise<void> {
         console.log("Setting up plugins...")
+        const appConfig = new AppConfigProvider()
 
-        const configuredPlugins = await ConfigProvider.get("plugins")
+        const configuredPlugins = await appConfig.get("plugins")
         console.log("Configured plugins:", configuredPlugins.join(", "))
         if (!configuredPlugins) throw new Error("No plugins configured. Set up config.json first.")
 
