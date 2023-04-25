@@ -27,7 +27,7 @@ export class EwelinkPlugin extends MonitoringPlugin implements Renderable {
             password: process.env.EWELINK_PASSWORD
         })
 
-        await this.refresh()
+        this.refresh().then(() => {})
 
         return Promise.resolve()
     }
@@ -53,6 +53,9 @@ export class EwelinkPlugin extends MonitoringPlugin implements Renderable {
         /* get all devices */
         return this.connection.getDevices().then((devices: Device[]) => {
             this.devices = devices
+            for (const device of this.devices) {
+                this.send(device, device.deviceid)
+            }
         })
     }
 
