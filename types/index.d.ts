@@ -42,7 +42,7 @@ declare module "@daemonitor/plugins" {
 
         monitorAll(): Promise<any>
 
-        addApiConnection(apiConnection: IConnector): Promise<void>
+        addConnector(connector: IConnector): Promise<void>
 
         refreshAll(): Promise<void>
 
