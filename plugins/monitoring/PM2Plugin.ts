@@ -1,5 +1,5 @@
 import pm2 from "pm2"
-import { MonitoringPlugin } from "../lib/MonitoringPlugin.js"
+import { MonitoringPlugin } from "../../lib/MonitoringPlugin.js"
 
 export  class PM2Plugin extends MonitoringPlugin {
     constructor() {

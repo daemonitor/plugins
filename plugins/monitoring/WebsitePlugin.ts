@@ -1,4 +1,4 @@
-import { MonitoringPlugin } from "../lib/MonitoringPlugin.js"
+import { MonitoringPlugin } from "../../lib/MonitoringPlugin.js"
 
 export class WebsitePlugin extends MonitoringPlugin {
     constructor() {

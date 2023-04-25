@@ -1,6 +1,6 @@
 import ewelink, { Device } from "ewelink-api"
 import * as dotenv from "dotenv"
-import { MonitoringPlugin } from "../lib/MonitoringPlugin.js"
+import { MonitoringPlugin } from "../../lib/MonitoringPlugin.js"
 import { Renderable } from "@daemonitor/common"
 
 dotenv.config()
