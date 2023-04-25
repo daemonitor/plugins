@@ -35,7 +35,7 @@ export class PluginManager {
         })
     }
 
-    async addApiConnection(apiConnection: IConnector): Promise<void> {
+    async addConnector(apiConnection: IConnector): Promise<void> {
         PluginManager.API_CONNECTIONS.push(apiConnection)
     }
 
@@ -61,9 +61,9 @@ export class PluginManager {
         if (!this.availablePlugins) throw new Error("Plugins not loaded yet! Call loadPlugins() first.")
         if (this.availablePlugins.length === 0) throw new Error("No plugins loaded.")
         if (!PluginManager.API_CONNECTIONS || PluginManager.API_CONNECTIONS.length === 0)
-            throw new Error("No API connections loaded yet! Call addApiConnection() first.")
+            throw new Error("No connections loaded yet! Call addConnector() first.")
 
-        console.log(`Starting monitoring of ${this.activePlugins.length} plugins...`)
+        console.log(`Monitoring ${this.activePlugins.length} plugins...`)
         for (const plugin of this.activePlugins) {
             console.log(` + ${plugin.getName()}`)
             const data = plugin.monitor()
