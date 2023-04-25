@@ -2,8 +2,8 @@
   "name": "@daemonitor/plugins",
   "version": "1.0.0",
   "description": "daemonitor plugins",
-  "main": "index.ts",
   "types": "types/index.d.ts",
+  "main": "dist/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -22,6 +22,10 @@
     "@daemonitor/common": "file:../common",
     "tsconfig-paths": "^4.2.0"
   },
+  "exports": {
+    ".": "./dist/index.js",
+    "./types": "./dist/types/index.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/daemonitor/plugins.git"
@@ -29,5 +33,6 @@
   "bugs": {
     "url": "https://github.com/daemonitor/plugins/issues"
   },
+
   "homepage": "https://github.com/daemonitor/plugins#readme"
 }
