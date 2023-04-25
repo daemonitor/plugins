@@ -5,13 +5,15 @@
     ]
   },
   "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "node",
+    "outDir": "dist",
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
     "lib": [
       "esnext",
       "dom"
     ],
-    "target": "esnext",
     "baseUrl": ".",
     "paths": {
       "~/*": [
@@ -22,14 +24,13 @@
       "./node_modules/@types",
       "./types"
     ],
-    "esModuleInterop": true
+    "esModuleInterop": false
   },
   "include": [
     "**/*.ts",
     "../daemonitor-frontend/.nuxt/types/imports.d.ts",
-    "../frontend/.nuxt/types/imports.d.ts"
   ],
   "exclude": [
     "node_modules"
-  ]
+  ],
 }
