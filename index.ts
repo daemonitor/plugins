@@ -1,11 +1,5 @@
-import BasePlugin from "./plugins/BasePlugin"
-import MonitoringPlugin from "./plugins/MonitoringPlugin"
-import PluginLoader from "./plugins/PluginLoader"
-import PluginConfigProvider from "./plugins/PluginConfigProvider"
-
-export {
-    PluginConfigProvider,
-    BasePlugin,
-    MonitoringPlugin,
-    PluginLoader,
-}
+export { PluginConfigProvider } from "./plugins/lib/PluginConfigProvider.js"
+export { BasePlugin } from "./plugins/lib/BasePlugin.js"
+export { MonitoringPlugin } from "./plugins/lib/MonitoringPlugin.js"
+export { PluginLoader } from "./plugins/lib/PluginLoader.js"
+export { PluginManager } from "./PluginManager.js"
