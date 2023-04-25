@@ -29,6 +29,9 @@ declare module "@daemonitor/plugins" {
 
 
     export class PluginManager {
+
+        constructor(configuredPlugins: any)
+
         static API_CONNECTIONS: IConnector[]
 
         initialize(): Promise<void>
