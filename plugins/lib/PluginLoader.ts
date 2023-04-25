@@ -22,7 +22,6 @@ export class PluginLoader {
         const plugins: Array<BasePlugin | MonitoringPlugin> = []
 
         for (const file of Object.keys(pluginClasses)) {
-            console.log("Loading plugin", file)
             const PluginClass = pluginClasses[file]
             const pluginInstance = new PluginClass()
             plugins.push(pluginInstance)
