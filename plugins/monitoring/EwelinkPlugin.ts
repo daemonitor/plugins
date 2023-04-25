@@ -60,7 +60,7 @@ export class EwelinkPlugin extends MonitoringPlugin implements Renderable {
     }
 
     async monitor(): Promise<any> {
-        this.refreshTimer = setInterval(this.refresh.bind(this), this.config.refreshInterval || 5000)
+        this.refreshTimer = setInterval(this.refresh.bind(this), this.config.refreshInterval || 30000)
     }
 
     async teardown(): Promise<void> {
