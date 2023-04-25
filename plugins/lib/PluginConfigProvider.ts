@@ -1,4 +1,4 @@
-class PluginConfigProvider {
+export class PluginConfigProvider {
     static config: any = {}
     static async get(key: string): Promise<any> {
         if (!PluginConfigProvider.config[key]) {
@@ -17,4 +17,3 @@ class PluginConfigProvider {
     // }
 }
 
-export default PluginConfigProvider

@@ -1,6 +1,6 @@
 import ewelink, { Device } from "ewelink-api"
 import * as dotenv from "dotenv"
-import { MonitoringPlugin } from "@daemonitor/plugins"
+import { MonitoringPlugin } from "../lib/MonitoringPlugin.js"
 import { Renderable } from "@daemonitor/common"
 
 dotenv.config()
@@ -66,12 +66,7 @@ export class EwelinkPlugin extends MonitoringPlugin implements Renderable {
 
 
     async render(): Promise<any> {
-        return h(
-            "div",
-            Array.from({length: 20}).map(() => {
-                return h("p", "hi")
-            })
-        )
+        return this.devices
     }
 }
 

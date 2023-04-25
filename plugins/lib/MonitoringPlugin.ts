@@ -1,7 +1,7 @@
-import BasePlugin from "~/plugins/BasePlugin"
-import PluginManager from "~/PluginManager"
+import { BasePlugin } from "./BasePlugin.js"
+import { PluginManager } from "@daemonitor/plugins"
 
-abstract class MonitoringPlugin extends BasePlugin {
+export abstract class MonitoringPlugin extends BasePlugin {
     static currentPluginIndex = 0
     protected instanceName: string
     protected refreshTimer: any
@@ -34,4 +34,3 @@ abstract class MonitoringPlugin extends BasePlugin {
     }
 }
 
-export default MonitoringPlugin

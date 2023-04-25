@@ -1,7 +1,7 @@
-import * as pm2 from "pm2"
-import { MonitoringPlugin } from "~/index"
+import pm2 from "pm2"
+import { MonitoringPlugin } from "../lib/MonitoringPlugin.js"
 
-class PM2Plugin extends MonitoringPlugin {
+export  class PM2Plugin extends MonitoringPlugin {
     constructor() {
         super("pm2", "PM2", "PM2 Monitoring Plugin")
     }
@@ -97,5 +97,3 @@ class PM2Plugin extends MonitoringPlugin {
         clearInterval(this.refreshTimer)
     }
 }
-
-export default PM2Plugin

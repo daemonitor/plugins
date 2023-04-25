@@ -11,8 +11,7 @@ import {
     type,
     uptime
 } from "os"
-import { MonitoringPlugin } from "~/index"
-
+import { MonitoringPlugin } from "../lib/MonitoringPlugin.js"
 
 export class OSPlugin extends MonitoringPlugin {
     constructor() {

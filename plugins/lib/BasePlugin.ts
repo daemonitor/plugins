@@ -1,11 +1,11 @@
-import PluginConfigProvider from "./PluginConfigProvider"
+import { PluginConfigProvider } from "./PluginConfigProvider.js"
 
-abstract class BasePlugin {
+export abstract class BasePlugin {
     static currentPluginIndex = 0
     protected alias: string
     protected name: string
     protected description: string
-    protected config: any
+     config: any
 
     protected constructor(alias: string, name: string, description: string) {
         this.config = PluginConfigProvider.get(alias)
@@ -25,5 +25,3 @@ abstract class BasePlugin {
         return this.name
     }
 }
-
-export default BasePlugin

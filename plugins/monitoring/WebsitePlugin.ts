@@ -1,6 +1,6 @@
-import { MonitoringPlugin } from "~/index"
+import { MonitoringPlugin } from "../lib/MonitoringPlugin.js"
 
-class WebSitePlugin extends MonitoringPlugin {
+export class WebsitePlugin extends MonitoringPlugin {
     constructor() {
         super("website", "Website", "Website Monitoring Plugin")
     }
@@ -54,4 +54,3 @@ class WebSitePlugin extends MonitoringPlugin {
     }
 }
 
-export default WebSitePlugin
