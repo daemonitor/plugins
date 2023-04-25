@@ -1,14 +1,19 @@
-import { PluginLoader } from "~/index"
-import { AppConfigProvider, IConnector } from "@daemonitor/common"
-import { BasePlugin, MonitoringPlugin } from "@daemonitor/plugins"
+import { PluginLoader } from "./index.js"
+import { IConnector } from "@daemonitor/common"
+import { BasePlugin } from "~/plugins/lib/BasePlugin.js"
+import { MonitoringPlugin } from "~/plugins/lib/MonitoringPlugin.js"
 
-export default class PluginManager {
+export class PluginManager {
 
     static API_CONNECTIONS: IConnector[] = []
     private availablePlugins: Array<MonitoringPlugin | BasePlugin>
     private activePlugins: Array<MonitoringPlugin | BasePlugin>
+    private configuredPlugins: any
 
-    constructor() {
+    constructor(configuredPlugins: any) {
+        this.availablePlugins = []
+        this.activePlugins = []
+        this.configuredPlugins = configuredPlugins
 
     }
 
@@ -37,14 +42,13 @@ export default class PluginManager {
 
     async setupAll(): Promise<void> {
         console.log("Setting up plugins...")
-        const appConfig = new AppConfigProvider()
 
-        const configuredPlugins = await appConfig.get("plugins")
-        console.log("Configured plugins:", configuredPlugins.join(", "))
-        if (!configuredPlugins) throw new Error("No plugins configured. Set up config.json first.")
+        // const configuredPlugins = await AppConfigProvider.get("plugins")
+        console.log("Configured plugins:", this.configuredPlugins.join(", "))
+        if (!this.configuredPlugins) throw new Error("No plugins configured. Set up config.json first.")
 
         this.activePlugins = this.availablePlugins.filter(plugin => {
-            return configuredPlugins.includes(plugin.getName().toLowerCase())
+            return this.configuredPlugins.includes(plugin.getName().toLowerCase())
         })
 
         if (!this.activePlugins) throw new Error("No plugins to set up.")
