@@ -27,7 +27,8 @@ export class EwelinkPlugin extends MonitoringPlugin implements Renderable {
             password: process.env.EWELINK_PASSWORD
         })
 
-        this.refresh().then(() => {})
+        this.refresh().then(() => {
+        })
 
         return Promise.resolve()
     }
@@ -52,9 +53,13 @@ export class EwelinkPlugin extends MonitoringPlugin implements Renderable {
     async refresh() {
         /* get all devices */
         return this.connection.getDevices().then((devices: Device[]) => {
-            this.devices = devices
-            for (const device of this.devices) {
-                this.send(device, device.deviceid)
+            if (Array.isArray(devices) && ( Symbol.iterator in Object(devices) )) {
+                this.devices = devices
+                for (const device of this.devices) {
+                    this.send(device, device.deviceid)
+                }
+            } else {
+                console.error("EwelinkPlugin: Invalid response from getDevices()", devices)
             }
         })
     }
