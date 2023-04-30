@@ -1,12 +1,16 @@
 {
   "name": "@daemonitor/plugins",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "daemonitor plugins",
   "types": "types/index.d.ts",
   "main": "dist/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "files": [
+    "dist",
+    "types"
+  ],
   "type": "module",
   "author": "",
   "license": "ISC",
@@ -19,7 +23,7 @@
     "pm2": "^5.1.0",
     "string-to-color": "^2.2.2",
     "ts-node": "^10.9.1",
-    "@daemonitor/common": "file:../common",
+    "@daemonitor/common": "^1.0.0",
     "tsconfig-paths": "^4.2.0"
   },
   "exports": {
