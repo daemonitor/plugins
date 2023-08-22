@@ -1,7 +1,7 @@
 import pm2 from "pm2"
 import { MonitoringPlugin } from "../../lib/MonitoringPlugin.js"
 
-export  class PM2Plugin extends MonitoringPlugin {
+export class PM2Plugin extends MonitoringPlugin {
     constructor() {
         super("pm2", "PM2", "PM2 Monitoring Plugin")
     }
@@ -25,6 +25,8 @@ export  class PM2Plugin extends MonitoringPlugin {
     }
 
     async refresh(): Promise<void> {
+        const instanceCounts = {}
+
         pm2.list(async (err, list) => {
                 if (!err) {
                     for (const p of list) {
@@ -45,6 +47,14 @@ export  class PM2Plugin extends MonitoringPlugin {
                             // kill_retry_time
                         } = p
 
+                        if (instanceCounts[name] === undefined) {
+                            instanceCounts[name] = 0
+                        }
+
+                        const index = instanceCounts[name]++
+
+                        const instance_id = `pm2-${name}-${index}`
+
                         let {
                             username,
                             watch,
@@ -52,6 +62,7 @@ export  class PM2Plugin extends MonitoringPlugin {
                             axm_monitor,
                             node_version,
                             unique_id,
+                            pm_name,
                             restart_time,
                             created_at,
                             unstable_restarts,
@@ -80,7 +91,7 @@ export  class PM2Plugin extends MonitoringPlugin {
                             status,
                             pm_uptime,
                         }
-                        await this.send(payload, `${unique_id}-${pm_id}`)
+                        await this.send(payload, instance_id)
                     }
                 } else {
                     console.error(err)
