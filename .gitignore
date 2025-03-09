@@ -1,5 +1,7 @@
+.DS_Store
 dist
 pnpm-lock.yaml
 .idea
 .env
 node_modules
+supabase/.temp
