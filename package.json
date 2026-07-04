@@ -1,6 +1,6 @@
 {
   "name": "@daemonitor/plugins",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "daemonitor plugins",
   "types": "types/index.d.ts",
   "main": "index.ts",
@@ -44,6 +44,5 @@
   "bugs": {
     "url": "https://github.com/daemonitor/plugins/issues"
   },
-
   "homepage": "https://github.com/daemonitor/plugins#readme"
 }
