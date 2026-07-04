@@ -18,6 +18,19 @@
     "./lib/*": "./lib/*.ts",
     "./plugins/*": "./plugins/*.ts"
   },
+  "publishConfig": {
+    "access": "public",
+    "main": "dist/index.js",
+    "types": "types/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./types/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./lib/*": "./dist/lib/*.js",
+      "./plugins/*": "./dist/plugins/*.js"
+    }
+  },
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@8.2.0",
