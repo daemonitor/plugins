@@ -1,19 +1,31 @@
-import { BasePlugin } from "./BasePlugin.js"
-import { MonitoringPlugin } from "./MonitoringPlugin.js"
+import { PluginBase } from "./BasePlugin"
+import pluginsFactory from "../plugins/index"
 
-import PluginClasses from "../plugins/index.js"
-
-
-export class PluginLoader {
-    static async loadPlugins(): Promise<Array<BasePlugin | MonitoringPlugin>> {
-        const plugins: Array<BasePlugin | MonitoringPlugin> = []
-
-        const pluginClasses = PluginClasses
-        for (const file of Object.keys(pluginClasses)) {
-            const PluginClass = pluginClasses[file]
-            const pluginInstance = new PluginClass()
-            plugins.push(pluginInstance)
+export const PluginLoader = {
+    // Load all plugins using the factories
+    loadPlugins: async function(): Promise<PluginBase[]> {
+        try {
+            const plugins: PluginBase[] = [];
+            
+            // Create plugin instances using the factory functions
+            const pluginFactories = pluginsFactory;
+            
+            for (const pluginName of Object.keys(pluginFactories)) {
+                const createPlugin = pluginFactories[pluginName];
+                if (typeof createPlugin === 'function') {
+                    try {
+                        const plugin = await createPlugin();
+                        plugins.push(plugin);
+                    } catch (err) {
+                        console.error(`Error creating plugin ${pluginName}:`, err);
+                    }
+                }
+            }
+            
+            return plugins;
+        } catch (error) {
+            console.error("Error loading plugins:", error);
+            return [];
         }
-        return plugins
     }
-}
+};

@@ -1,110 +1,148 @@
-import pm2 from "pm2"
-import { MonitoringPlugin } from "../../lib/MonitoringPlugin.js"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
 
-export class PM2Plugin extends MonitoringPlugin {
-    constructor() {
-        super("pm2", "PM2", "PM2 Monitoring Plugin")
-    }
+// Factory function to create PM2 plugin
+export function createPM2Plugin() {
+  // Create plugin state
+  let pm2Instance: any = null;
+  let refreshTimer: any = null;
 
-    async setup(): Promise<void> {
-        return new Promise((resolve, reject) => {
+  // Define setup function
+  const setupFn = async (plugin: MonitoringPluginBase): Promise<void> => {
+    try {
+      // First, check if PM2 is available globally (injected by the client-test)
+      if ((global as any).pm2Library) {
+        console.log("Using globally provided PM2 instance");
+        pm2Instance = (global as any).pm2Library;
+      } else {
+        // Otherwise use dynamic import approach which is ESM friendly
+        try {
+          const pm2Module = await import('pm2');
+          pm2Instance = pm2Module.default || pm2Module;
+          
+          // If import fails, try CommonJS require as fallback
+          if (!pm2Instance) {
             try {
-                pm2.connect(async (err) => {
-                    if (err) {
-                        console.error(err)
-                        reject(err)
-                    } else {
-                        resolve()
-                    }
-                })
-            } catch (e) {
-                console.error("ERROR", e)
-                reject(e)
+              // @ts-ignore - Dynamically require pm2
+              pm2Instance = require('pm2');
+            } catch (requireErr) {
+              console.error("Failed to require PM2:", requireErr);
+              throw new Error(`Neither import nor require could load pm2: ${requireErr.message}`);
             }
-        })
+          }
+        } catch (err) {
+          console.error("Failed to import PM2:", err);
+          throw new Error(`PM2 import failed: ${err.message}`);
+        }
+      }
+      
+      // Return a promise for the PM2 connection
+      return new Promise<void>((resolve, reject) => {
+        pm2Instance.connect((err) => {
+          if (err) {
+            console.error("PM2 connection failed:", err);
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+    } catch (e) {
+      console.error("PM2Plugin setup error:", e);
+      throw e;
     }
+  };
 
-    async refresh(): Promise<void> {
-        const instanceCounts = {}
-
-        pm2.list(async (err, list) => {
-                if (!err) {
-                    for (const p of list) {
-                        let {
-                            pid, name, pm_id, monit,
-                            // exit_code,
-                            // prev_restart_delay,
-                            // versioning,
-                            // axm_dynamic,
-                            // axm_actions,
-                            // merge_logs,
-                            // vizion,
-                            // instance_var,
-                            // pmx,
-                            // automation,
-                            // treekill,
-                            // windowsHide,
-                            // kill_retry_time
-                        } = p
-
-                        if (instanceCounts[name] === undefined) {
-                            instanceCounts[name] = 0
-                        }
-
-                        const index = instanceCounts[name]++
-
-                        const instance_id = `pm2-${name}-${index}`
-
-                        let {
-                            username,
-                            watch,
-                            axm_options,
-                            axm_monitor,
-                            node_version,
-                            unique_id,
-                            pm_name,
-                            restart_time,
-                            created_at,
-                            unstable_restarts,
-                            autorestart,
-                            status,
-                            pm_uptime
-                        } = p.pm2_env as any
-
-                        const payload = {
-                            updated: ( new Date() ).getTime(),
-                            created_at,
-                            unstable_restarts,
-                            restarts: restart_time,
-                            pid,
-                            name,
-                            pm_id,
-                            monit,
-                            username,
-                            watch,
-                            axm_options,
-                            axm_monitor,
-                            node_version,
-                            unique_id,
-                            restart_time,
-                            autorestart,
-                            status,
-                            pm_uptime,
-                        }
-                        await this.send(payload, instance_id)
-                    }
-                } else {
-                    console.error(err)
-                }
-            }
-        )
+  // Define refresh function
+  const refreshFn = async (plugin: MonitoringPluginBase): Promise<void> => {
+    if (!pm2Instance) {
+      console.error("PM2 instance not initialized");
+      return;
     }
+    
+    const instanceCounts: Record<string, number> = {};
 
-    async monitor(): Promise<any> {
-        this.refreshTimer = setInterval(this.refresh.bind(this), this.config.refreshInterval || 5000)
-    }
+    pm2Instance.list(async (err, list) => {
+      if (!err) {
+        for (const p of list) {
+          let {
+            pid, name, pm_id, monit,
+          } = p;
 
-    async teardown(): Promise<void> {
-        clearInterval(this.refreshTimer)
+          if (instanceCounts[name] === undefined) {
+            instanceCounts[name] = 0;
+          }
+
+          const index = instanceCounts[name]++;
+          const instance_id = `pm2-${name}-${index}`;
+
+          let {
+            username,
+            watch,
+            axm_options,
+            axm_monitor,
+            node_version,
+            unique_id,
+            pm_name,
+            restart_time,
+            created_at,
+            unstable_restarts,
+            autorestart,
+            status,
+            pm_uptime
+          } = p.pm2_env as any;
+
+          const payload = {
+            updated: (new Date()).getTime(),
+            created_at,
+            unstable_restarts,
+            restarts: restart_time,
+            pid,
+            name,
+            pm_id,
+            monit,
+            username,
+            watch,
+            axm_options,
+            axm_monitor,
+            node_version,
+            unique_id,
+            restart_time,
+            autorestart,
+            status,
+            pm_uptime,
+          };
+          
+          await plugin.send(payload, instance_id);
+        }
+      } else {
+        console.error(err);
+      }
+    });
+  };
+
+  // Define monitor function
+  const monitorFn = async (plugin: MonitoringPluginBase): Promise<void> => {
+    refreshTimer = setInterval(() => refreshFn(plugin), plugin.config.refreshInterval || 5000);
+  };
+
+  // Define teardown function
+  const teardownFn = async (plugin: MonitoringPluginBase): Promise<void> => {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
     }
+  };
+
+  // Create and return the plugin
+  return createMonitoringPlugin(
+    "pm2",
+    "PM2",
+    "PM2 Monitoring Plugin",
+    setupFn,
+    monitorFn,
+    refreshFn,
+    teardownFn
+  );
 }
+
+// Export a default factory function for plugin loader
+export default createPM2Plugin;

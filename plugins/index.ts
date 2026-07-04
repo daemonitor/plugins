@@ -1,17 +1,25 @@
-import { EwelinkPlugin } from "./monitoring/EwelinkPlugin.js"
-import { OSPlugin } from "./monitoring/OSPlugin.js"
-import { PM2Plugin } from "./monitoring/PM2Plugin.js"
-import { MongoDBPlugin } from "./monitoring/MongoDBPlugin.js"
-import { WebsitePlugin } from "./monitoring/WebsitePlugin.js"
-import { DockerPlugin } from "./monitoring/DockerPlugin.js"
-import { CloudflarePlugin } from "./monitoring/CloudflarePlugin.js"
+// Import plugin factory functions
+import { createPM2Plugin } from "./monitoring/PM2Plugin"
+import { createDockerPlugin } from "./monitoring/DockerPlugin"
+import { createLxcPlugin } from "./monitoring/LxcPlugin"
 
+// In future, implement other plugin factory functions using the same pattern
+// import { createOSPlugin } from "./monitoring/OSPlugin"
+// import { createMongoDBPlugin } from "./monitoring/MongoDBPlugin"
+// import { createWebsitePlugin } from "./monitoring/WebsitePlugin"
+// import { createCloudflarePlugin } from "./monitoring/CloudflarePlugin"
+// import { createEwelinkPlugin } from "./monitoring/EwelinkPlugin"
+
+// Export factory functions to create plugin instances.
+// (Keys are display-only; the manager activates a plugin when its getName()
+// lowercased matches an alias in the config `plugins` array.)
 export default {
-    CloudflarePlugin,
-    DockerPlugin,
-    EwelinkPlugin,
-    MongoDBPlugin,
-    OSPlugin,
-    PM2Plugin,
-    WebsitePlugin
+    PM2Plugin: createPM2Plugin,
+    Docker: createDockerPlugin,
+    Lxc: createLxcPlugin,
+    // CloudflarePlugin: createCloudflarePlugin,
+    // EwelinkPlugin: createEwelinkPlugin,
+    // MongoDBPlugin: createMongoDBPlugin,
+    // OSPlugin: createOSPlugin,
+    // WebsitePlugin: createWebsitePlugin,
 }

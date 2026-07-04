@@ -1,36 +1,74 @@
-import { BasePlugin } from "./BasePlugin.js"
-import { PluginManager } from "@daemonitor/plugins"
+import { PluginBase } from "./BasePlugin"
+import { PluginManager } from "./PluginManager"
 
-export abstract class MonitoringPlugin extends BasePlugin {
-    static currentPluginIndex = 0
-    protected instanceName: string
-    protected refreshTimer: any
-    protected uniqueId: string
-    protected pluginIndex: number
+// Define the monitoring plugin interface
+export type MonitoringPluginBase = PluginBase & {
+  instanceName: string;
+  refreshTimer?: any;
+  uniqueId: string;
+  pluginIndex: number;
+  
+  send: (data: any, unique_id?: string) => Promise<void>;
+}
 
-    protected constructor(alias: string, name: string, description: string) {
-        super(alias, name, description)
-        this.pluginIndex = MonitoringPlugin.currentPluginIndex++
-        this.instanceName = this.config.name || name
-        this.uniqueId = this.config?.uniqueId || this.alias + "-" + this.pluginIndex
+let monitoringPluginIndex = 0;
+
+export function createMonitoringPlugin(
+  alias: string,
+  name: string,
+  description: string,
+  setupFn: (plugin: MonitoringPluginBase) => Promise<void>,
+  monitorFn: (plugin: MonitoringPluginBase) => Promise<any>,
+  refreshFn: (plugin: MonitoringPluginBase) => Promise<void>,
+  teardownFn: (plugin: MonitoringPluginBase) => Promise<void>
+): MonitoringPluginBase {
+  const config = PluginManager.getConfig ? PluginManager.getConfig(alias) : {};
+  const pluginIndex = monitoringPluginIndex++;
+  const instanceName = config?.name || name;
+  const uniqueId = config?.uniqueId || `${alias}-${pluginIndex}`;
+  
+  const plugin: MonitoringPluginBase = {
+    alias,
+    name,
+    description,
+    config,
+    instanceName,
+    uniqueId,
+    pluginIndex,
+    
+    setup: async function() {
+      return setupFn(this);
+    },
+    
+    monitor: async function() {
+      return monitorFn(this);
+    },
+    
+    refresh: async function() {
+      return refreshFn(this);
+    },
+    
+    teardown: async function() {
+      return teardownFn(this);
+    },
+    
+    getName: function() {
+      return this.name;
+    },
+    
+    send: async function(data: any, unique_id?: string) {
+      // Access API_CONNECTIONS from PluginManager
+      const connections = PluginManager.API_CONNECTIONS || [];
+      for (const apiConnection of connections) {
+        await apiConnection.sendData(
+          { name: this.instanceName, ...data }, 
+          this.name, 
+          unique_id || this.uniqueId
+        );
+      }
     }
-
-    public async send(data: any, unique_id?: string): Promise<void> {
-        for (const apiConnection of PluginManager.API_CONNECTIONS) {
-            await apiConnection.sendData({name: this.instanceName, ...data}, this.name, unique_id || this.uniqueId)
-        }
-    }
-
-    abstract setup(): Promise<void>;
-
-    abstract monitor(): Promise<any>;
-
-    abstract refresh(): Promise<void>;
-
-    abstract teardown(): Promise<void>;
-
-    getName() {
-        return this.name
-    }
+  };
+  
+  return plugin;
 }
 

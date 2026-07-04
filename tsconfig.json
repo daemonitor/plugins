@@ -8,7 +8,7 @@
     "outDir": "dist",
     "target": "esnext",
     "module": "esnext",
-    "moduleResolution": "NodeNext",
+    "moduleResolution": "node",
     "rootDir": ".",
     "lib": [
       "esnext",
@@ -24,7 +24,7 @@
       "./node_modules/@types",
       "./types"
     ],
-    "esModuleInterop": false
+    "esModuleInterop": true
   },
   "include": [
     "**/*.ts",
