@@ -1,0 +1,13 @@
+[install]
+# Use the same package manager as the workspace
+pnpm = true
+
+[runtime]
+# Enable ESM
+module = "esm"
+
+# Handle circular dependencies
+suppress_warnings = ["circular-import"]
+
+# Allow extensions to be resolved
+resolve_extensions = [".ts", ".js", ".json"]

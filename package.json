@@ -3,7 +3,8 @@
   "version": "1.0.3",
   "description": "daemonitor plugins",
   "types": "types/index.d.ts",
-  "main": "dist/index.js",
+  "main": "index.ts",
+  "type": "module",
   "scripts": {
     "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -12,7 +13,11 @@
     "dist",
     "types"
   ],
-  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./lib/*": "./lib/*.ts",
+    "./plugins/*": "./plugins/*.ts"
+  },
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@8.2.0",
@@ -26,15 +31,11 @@
     "ewelink-api": "^3.1.1",
     "node-machine-id": "^1.1.12",
     "ohmyfetch": "^0.4.21",
-    "pm2": "^5.1.0",
     "string-to-color": "^2.2.2",
     "ts-node": "^10.9.1",
     "@daemonitor/common": "^1.0.0",
-    "tsconfig-paths": "^4.2.0"
-  },
-  "exports": {
-    ".": "./dist/index.js",
-    "./types": "./dist/types/index.js"
+    "tsconfig-paths": "^4.2.0",
+    "pm2": "^6.0.5"
   },
   "repository": {
     "type": "git",

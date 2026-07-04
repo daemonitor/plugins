@@ -1,3 +1,4 @@
+import { MonitoringPlugin } from "~/lib/MonitoringPlugin"
 import {
     arch,
     cpus,
@@ -11,7 +12,6 @@ import {
     type,
     uptime
 } from "os"
-import { MonitoringPlugin } from "../../lib/MonitoringPlugin.js"
 
 export class OSPlugin extends MonitoringPlugin {
     constructor() {

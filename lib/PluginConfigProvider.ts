@@ -1,19 +1,19 @@
 export class PluginConfigProvider {
     static config: any = {}
-    static async get(key: string): Promise<any> {
-        if (!PluginConfigProvider.config[key]) {
-            return null
-        }
-        return PluginConfigProvider.config[key]
+
+    /**
+     * Load the full client config (the parsed client.config.json). Per-plugin
+     * sections are keyed by alias (e.g. config.docker, config.pm2). Without this
+     * the per-alias `get()` below always returns null and plugins silently fall
+     * back to their hardcoded defaults.
+     */
+    static loadAll(config: any): void {
+        PluginConfigProvider.config = config || {}
     }
 
-    // static async loadConfig(): Promise<void> {
-    //     if (!ConfigProvider.config) {
-    //         const configPath = path.join(__dirname, "config.json")
-    //         return await fs.readFile(configPath, "utf8").then((data) => {
-    //             ConfigProvider.config = JSON.parse(data)
-    //         })
-    //     }
-    // }
+    /** Synchronous lookup of a plugin's config section by alias. */
+    static get(key: string): any {
+        const section = PluginConfigProvider.config?.[key]
+        return section == null ? null : section
+    }
 }
-
