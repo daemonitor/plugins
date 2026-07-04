@@ -2,6 +2,8 @@
 import { createPM2Plugin } from "./monitoring/PM2Plugin"
 import { createDockerPlugin } from "./monitoring/DockerPlugin"
 import { createLxcPlugin } from "./monitoring/LxcPlugin"
+import { createOSPlugin } from "./monitoring/OSPlugin"
+import { createWebsitePlugin } from "./monitoring/WebsitePlugin"
 
 // In future, implement other plugin factory functions using the same pattern
 // import { createOSPlugin } from "./monitoring/OSPlugin"
@@ -17,6 +19,8 @@ export default {
     PM2Plugin: createPM2Plugin,
     Docker: createDockerPlugin,
     Lxc: createLxcPlugin,
+    OS: createOSPlugin,
+    Website: createWebsitePlugin,
     // CloudflarePlugin: createCloudflarePlugin,
     // EwelinkPlugin: createEwelinkPlugin,
     // MongoDBPlugin: createMongoDBPlugin,
