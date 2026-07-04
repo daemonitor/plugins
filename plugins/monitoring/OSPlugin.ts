@@ -1,42 +1,23 @@
-import { MonitoringPlugin } from "~/lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
 import {
-    arch,
-    cpus,
-    freemem,
-    hostname,
-    loadavg,
-    networkInterfaces,
-    platform,
-    release,
-    totalmem,
-    type,
-    uptime
+    arch, cpus, freemem, hostname, loadavg, networkInterfaces,
+    platform, release, totalmem, type, uptime,
 } from "os"
 
-export class OSPlugin extends MonitoringPlugin {
-    constructor() {
-        super("os", "OS", "OS Monitoring Plugin")
-    }
+// Host OS metrics: cpu (from cpus().times), memory, load, uptime, addresses.
+// Matches the frontend `os` fleetAdapter case.
+export function createOSPlugin() {
+    let refreshTimer: any = null
 
-    async setup(): Promise<void> {
-        // no setup required
-        return Promise.resolve()
-    }
-
-    async refresh(): Promise<void> {
+    const collect = () => {
         const interfaces = networkInterfaces()
-        const addresses: { [key: string]: { address: string, netmask: string, mac: string } } = {}
-        for (let [key, value] of Object.entries(interfaces)) {
-            if (value) {
-                let found = value.find(port => ( port.family === "IPv4" ) && ( port.internal !== true ))
-                if (found) {
-                    let {address, netmask, mac} = found
-                    addresses[key] = {address, netmask, mac}
-                }
-            }
+        const addresses: Record<string, { address: string; netmask: string; mac: string }> = {}
+        for (const [key, value] of Object.entries(interfaces)) {
+            if (!value) continue
+            const found = value.find((p) => p.family === "IPv4" && p.internal !== true)
+            if (found) addresses[key] = { address: found.address, netmask: found.netmask, mac: found.mac }
         }
-
-        await this.send({
+        return {
             addresses,
             totalmem: totalmem(),
             freemem: freemem(),
@@ -47,16 +28,37 @@ export class OSPlugin extends MonitoringPlugin {
             release: release(),
             type: type(),
             arch: arch(),
-            cpus: cpus()
-        })
-
+            cpus: cpus(),
+        }
     }
 
-    async monitor(): Promise<any> {
-        this.refreshTimer = setInterval(this.refresh.bind(this), this.config.refreshInterval || 5000)
+    const refreshFn = async (plugin: MonitoringPluginBase): Promise<void> => {
+        try {
+            await plugin.send({ name: hostname(), ...collect() }, "os")
+        } catch (err) {
+            console.error("os: refresh error:", (err as Error).message)
+        }
     }
 
-    async teardown(): Promise<void> {
-        clearInterval(this.refreshTimer)
+    const monitorFn = async (plugin: MonitoringPluginBase): Promise<void> => {
+        await refreshFn(plugin)
+        refreshTimer = setInterval(() => refreshFn(plugin), plugin.config?.refreshInterval || 30000)
     }
+
+    const teardownFn = async (): Promise<void> => {
+        if (refreshTimer) clearInterval(refreshTimer)
+        refreshTimer = null
+    }
+
+    return createMonitoringPlugin(
+        "os",
+        "os",
+        "Host OS monitoring plugin",
+        async () => {},
+        monitorFn,
+        refreshFn,
+        teardownFn,
+    )
 }
+
+export default createOSPlugin
