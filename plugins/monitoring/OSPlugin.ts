@@ -3,6 +3,86 @@ import {
     arch, cpus, freemem, hostname, loadavg, networkInterfaces,
     platform, release, totalmem, type, uptime,
 } from "os"
+import { readFileSync } from "fs"
+import { execSync } from "child_process"
+
+interface Disk {
+    device: string
+    fstype: string
+    mount: string
+    total: number
+    used: number
+    free: number
+    pct: number
+}
+
+// Pseudo / virtual filesystems that aren't real drives.
+const PSEUDO_FS = new Set([
+    "tmpfs", "devtmpfs", "squashfs", "overlay", "overlayfs", "aufs", "proc", "sysfs",
+    "cgroup", "cgroup2", "mqueue", "debugfs", "tracefs", "devpts", "ramfs", "nsfs",
+    "binfmt_misc", "configfs", "pstore", "efivarfs", "autofs", "fusectl", "securityfs",
+    "hugetlbfs", "none", "fuse.gvfsd-fuse", "fuse.portal", "fuse.snapfuse",
+])
+
+// Real, physical/attached drives only. Shells out to `df` and filters out
+// pseudo filesystems, loop/snap mounts, and bind-mount duplicates.
+function collectDisks(): Disk[] {
+    try {
+        const darwin = platform() === "darwin"
+        // Linux: `-T` gives the fstype column; bytes via --block-size=1.
+        // macOS: no fstype flag, `-l` restricts to local filesystems.
+        const cmd = darwin ? "df -kl" : "df -PT --block-size=1"
+        const out = execSync(cmd, { encoding: "utf8", timeout: 5000 })
+        const seen = new Set<string>()
+        const disks: Disk[] = []
+        for (const line of out.split("\n").slice(1)) {
+            const p = line.trim().split(/\s+/)
+            if (p.length < 6) continue
+            let device: string, fstype: string, total: number, used: number, free: number, mount: string
+            if (darwin) {
+                // Filesystem 1K-blocks Used Avail Capacity iused ifree %iused Mounted-on
+                device = p[0]; fstype = ""
+                total = (Number(p[1]) || 0) * 1024
+                used = (Number(p[2]) || 0) * 1024
+                free = (Number(p[3]) || 0) * 1024
+                mount = p.slice(8).join(" ")
+                if (!device.startsWith("/dev/")) continue
+            } else {
+                // Filesystem Type 1B-blocks Used Available Capacity Mounted-on
+                device = p[0]; fstype = p[1]
+                total = Number(p[2]) || 0
+                used = Number(p[3]) || 0
+                free = Number(p[4]) || 0
+                mount = p.slice(6).join(" ")
+                if (PSEUDO_FS.has(fstype)) continue
+            }
+            if (total <= 0 || device === "overlay" || device === "none" || device.startsWith("/dev/loop")) continue
+            if (seen.has(device)) continue // bind mounts of the same drive
+            seen.add(device)
+            disks.push({ device, fstype, mount, total, used, free, pct: total ? Math.round((used / total) * 100) : 0 })
+        }
+        return disks.sort((a, b) => b.pct - a.pct)
+    } catch {
+        return []
+    }
+}
+
+// True available memory: on Linux, os.freemem() returns MemFree, which excludes
+// reclaimable page cache and makes hosts look near-full. MemAvailable is the
+// kernel's estimate of memory obtainable without swapping. Fall back to freemem()
+// on non-Linux (or if /proc is unreadable).
+function availableMem(): number {
+    if (platform() === "linux") {
+        try {
+            const info = readFileSync("/proc/meminfo", "utf8")
+            const m = info.match(/^MemAvailable:\s+(\d+)\s*kB/m)
+            if (m) return parseInt(m[1], 10) * 1024
+        } catch {
+            // fall through to freemem()
+        }
+    }
+    return freemem()
+}
 
 // Host OS metrics: cpu (from cpus().times), memory, load, uptime, addresses.
 // Matches the frontend `os` fleetAdapter case.
@@ -21,6 +101,8 @@ export function createOSPlugin() {
             addresses,
             totalmem: totalmem(),
             freemem: freemem(),
+            available: availableMem(),
+            disks: collectDisks(),
             loadavg: loadavg(),
             uptime: uptime(),
             hostname: hostname(),
