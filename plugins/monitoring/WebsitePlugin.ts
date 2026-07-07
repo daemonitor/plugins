@@ -1,4 +1,32 @@
+import * as http from "node:http"
+import * as https from "node:https"
+import { URL } from "node:url"
 import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+
+// A direct-to-origin check, for sites fronted by a CDN (Cloudflare) where the
+// public URL alone can't tell you the origin server is actually healthy — CF
+// can keep serving stale/cached content while the origin is down. `url` is
+// the address that actually reaches the origin (its own hostname/IP, e.g.
+// origin.example.com), and `host` overrides the Host header so the origin's
+// vhost config routes the request as if it came in on the public hostname
+// (e.g. www.example.com) — the same trick as `curl -H "Host: ..."`.
+interface OriginCheck {
+    url: string
+    host?: string
+    headers?: Record<string, string>
+    query?: Record<string, string>
+    // Some origins only accept direct (non-CF) traffic carrying a marker the
+    // reverse proxy/WAF checks for — supply it via `headers` or `query`
+    // (e.g. { query: { cf: "1" } }), not a dedicated option, since the
+    // marker's shape is entirely site-specific.
+    insecure?: boolean // skip TLS verification, for origins with self-signed/internal certs
+    timeout?: number
+    // Falls back to the endpoint's own expectedStrings/unexpectedStrings/
+    // expectedStatusCode when omitted, since it's normally the same content.
+    expectedStrings?: string[]
+    unexpectedStrings?: string[]
+    expectedStatusCode?: number
+}
 
 interface Endpoint {
     name?: string
@@ -7,10 +35,99 @@ interface Endpoint {
     unexpectedStrings?: string[]
     expectedStatusCode?: number
     timeout?: number
+    origin?: OriginCheck
+}
+
+interface RawResult {
+    status: number
+    body: string
+    duration: number
+    error?: string
+}
+
+// Low-level GET that can hit one host (`target`) while presenting a different
+// Host header. fetch() can't do this — Host is a forbidden header per the
+// Fetch spec and is silently dropped — so this uses Node's http/https
+// directly, which honors it.
+function rawGet(target: string, opts: { host?: string; headers?: Record<string, string>; query?: Record<string, string>; insecure?: boolean; timeout?: number }): Promise<RawResult> {
+    return new Promise((resolve) => {
+        const start = Date.now()
+        let u: URL
+        try {
+            u = new URL(target)
+        } catch {
+            resolve({ status: 0, body: "", duration: 0, error: `Invalid origin URL: ${target}` })
+            return
+        }
+        for (const [k, v] of Object.entries(opts.query || {})) u.searchParams.set(k, v)
+
+        const headers: Record<string, string> = { ...(opts.headers || {}) }
+        if (opts.host) headers.Host = opts.host
+
+        const lib = u.protocol === "http:" ? http : https
+        const req = lib.request(
+            {
+                hostname: u.hostname,
+                port: u.port || (u.protocol === "http:" ? 80 : 443),
+                path: `${u.pathname}${u.search}`,
+                method: "GET",
+                headers,
+                // Explicit servername pins TLS/SNI to the real connection
+                // target. Without it, Node derives SNI from headers.Host,
+                // which would validate the cert against the WRONG hostname
+                // (the public one, not the origin actually being dialed).
+                ...(u.protocol === "https:" ? { servername: u.hostname, rejectUnauthorized: !opts.insecure } : {}),
+            },
+            (res) => {
+                let body = ""
+                res.on("data", (c) => { body += c })
+                res.on("end", () => resolve({ status: res.statusCode || 0, body, duration: Date.now() - start }))
+            },
+        )
+        req.on("error", (err) => resolve({ status: 0, body: "", duration: Date.now() - start, error: err.message }))
+        const timeoutMs = opts.timeout || 10000
+        req.setTimeout(timeoutMs, () => {
+            req.destroy()
+            resolve({ status: 0, body: "", duration: Date.now() - start, error: "timeout" })
+        })
+        req.end()
+    })
+}
+
+function evaluate(body: string, status: number, expected: string[], unexpected: string[], expectedStatusCode?: number) {
+    const hasAllExpectedStrings = expected.every((s) => body.indexOf(s) !== -1)
+    const hasAnyUnexpectedStrings = unexpected.some((s) => body.indexOf(s) !== -1)
+    const statusOk = expectedStatusCode ? status === expectedStatusCode : status >= 200 && status < 400
+    return { ok: statusOk && hasAllExpectedStrings && !hasAnyUnexpectedStrings, hasAllExpectedStrings, hasAnyUnexpectedStrings }
+}
+
+async function checkOrigin(ep: Endpoint): Promise<any> {
+    const oc = ep.origin!
+    const r = await rawGet(oc.url, {
+        host: oc.host,
+        headers: oc.headers,
+        query: oc.query,
+        insecure: oc.insecure,
+        timeout: oc.timeout ?? ep.timeout,
+    })
+    if (r.error) {
+        return { url: oc.url, host: oc.host, status: r.status, duration: r.duration, ok: false, error: r.error }
+    }
+    const { ok, hasAllExpectedStrings, hasAnyUnexpectedStrings } = evaluate(
+        r.body,
+        r.status,
+        oc.expectedStrings ?? ep.expectedStrings ?? [],
+        oc.unexpectedStrings ?? ep.unexpectedStrings ?? [],
+        oc.expectedStatusCode ?? ep.expectedStatusCode,
+    )
+    return { url: oc.url, host: oc.host, status: r.status, duration: r.duration, ok, hasAllExpectedStrings, hasAnyUnexpectedStrings }
 }
 
 // HTTP uptime/content checks. Emits one client_state per endpoint, matching the
 // frontend `web`/`website` fleetAdapter case ({ url, name, ok, status, duration }).
+// Optionally two-tiered: the public URL (through Cloudflare/CDN) plus a direct
+// origin check, nested under `origin`, so a CDN masking an origin outage still
+// surfaces as a warning even while the public site keeps serving fine.
 export function createWebsitePlugin() {
     let refreshTimer: any = null
 
@@ -18,6 +135,7 @@ export function createWebsitePlugin() {
         const start = Date.now()
         const label = ep.name || ep.url
         const uid = `web-${(ep.name || ep.url).replace(/[^a-zA-Z0-9_.-]+/g, "-")}`
+        let publicResult: any
         try {
             const ctrl = new AbortController()
             const t = ep.timeout ? setTimeout(() => ctrl.abort(), ep.timeout) : null
@@ -26,45 +144,63 @@ export function createWebsitePlugin() {
             const body = await res.text()
             const duration = Date.now() - start
 
-            const expected = ep.expectedStrings || []
-            const unexpected = ep.unexpectedStrings || []
-            const hasAllExpected = expected.every((s) => body.indexOf(s) !== -1)
-            const hasAnyUnexpected = unexpected.some((s) => body.indexOf(s) !== -1)
-            const statusOk = ep.expectedStatusCode ? res.status === ep.expectedStatusCode : res.ok
-            const ok = statusOk && hasAllExpected && !hasAnyUnexpected
+            const { ok, hasAllExpectedStrings, hasAnyUnexpectedStrings } = evaluate(
+                body,
+                res.status,
+                ep.expectedStrings || [],
+                ep.unexpectedStrings || [],
+                ep.expectedStatusCode,
+            )
 
-            await plugin.send(
-                {
-                    name: label,
-                    url: res.url || ep.url,
-                    status: res.status,
-                    duration,
-                    ok,
-                    redirected: res.redirected,
-                    hasAllExpectedStrings: hasAllExpected,
-                    hasAnyUnexpectedStrings: hasAnyUnexpected,
-                },
-                uid,
-            )
+            publicResult = {
+                name: label,
+                url: res.url || ep.url,
+                status: res.status,
+                duration,
+                ok,
+                redirected: res.redirected,
+                hasAllExpectedStrings,
+                hasAnyUnexpectedStrings,
+            }
         } catch (err) {
-            await plugin.send(
-                {
-                    name: label,
-                    url: ep.url,
-                    status: 0,
-                    duration: Date.now() - start,
-                    ok: false,
-                    error: (err as Error).message,
-                },
-                uid,
-            )
+            publicResult = {
+                name: label,
+                url: ep.url,
+                status: 0,
+                duration: Date.now() - start,
+                ok: false,
+                error: (err as Error).message,
+            }
         }
+
+        const origin = ep.origin?.url ? await checkOrigin(ep) : undefined
+
+        await plugin.send(
+            {
+                ...publicResult,
+                // Overall ok reflects both tiers — the origin check exists
+                // specifically to catch failures the public tier can't see.
+                ok: publicResult.ok && (origin ? origin.ok : true),
+                origin,
+            },
+            uid,
+        )
     }
 
     const endpointsOf = (plugin: MonitoringPluginBase): Endpoint[] => {
         const cfg = plugin.config || {}
         if (Array.isArray(cfg.endpoints)) return cfg.endpoints
-        if (cfg.url) return [{ name: cfg.name, url: cfg.url, expectedStrings: cfg.expectedStrings, unexpectedStrings: cfg.unexpectedStrings }]
+        if (cfg.url) {
+            return [{
+                name: cfg.name,
+                url: cfg.url,
+                expectedStrings: cfg.expectedStrings,
+                unexpectedStrings: cfg.unexpectedStrings,
+                expectedStatusCode: cfg.expectedStatusCode,
+                timeout: cfg.timeout,
+                origin: cfg.origin,
+            }]
+        }
         return []
     }
 
