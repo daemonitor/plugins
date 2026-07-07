@@ -87,16 +87,30 @@ function collectDisks(): Disk[] {
     }
 }
 
-// True available memory: on Linux, os.freemem() returns MemFree, which excludes
-// reclaimable page cache and makes hosts look near-full. MemAvailable is the
-// kernel's estimate of memory obtainable without swapping. Fall back to freemem()
-// on non-Linux (or if /proc is unreadable).
+// True available memory. os.freemem() returns only truly-free memory, which on
+// both Linux and macOS excludes large amounts of reclaimable memory (page cache /
+// inactive / speculative), making hosts look near-full. Use the OS's own estimate
+// of obtainable-without-pressure memory instead.
 function availableMem(): number {
-    if (platform() === "linux") {
+    const plat = platform()
+    if (plat === "linux") {
         try {
             const info = readFileSync("/proc/meminfo", "utf8")
             const m = info.match(/^MemAvailable:\s+(\d+)\s*kB/m)
             if (m) return parseInt(m[1], 10) * 1024
+        } catch {
+            // fall through to freemem()
+        }
+    }
+    if (plat === "darwin") {
+        // macOS reclaimable ≈ free + inactive + speculative + purgeable pages
+        // (matches "available" — the rest is app/wired/compressed).
+        try {
+            const out = execSync("vm_stat", { encoding: "utf8", timeout: 3000 })
+            const ps = Number(out.match(/page size of (\d+) bytes/)?.[1]) || 4096
+            const pages = (label: string) => Number(out.match(new RegExp(`${label}:\\s+(\\d+)`))?.[1]) || 0
+            const avail = (pages("Pages free") + pages("Pages inactive") + pages("Pages speculative") + pages("Pages purgeable")) * ps
+            if (avail > 0) return avail
         } catch {
             // fall through to freemem()
         }
