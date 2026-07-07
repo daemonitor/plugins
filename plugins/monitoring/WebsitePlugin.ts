@@ -175,16 +175,13 @@ export function createWebsitePlugin() {
 
         const origin = ep.origin?.url ? await checkOrigin(ep) : undefined
 
-        await plugin.send(
-            {
-                ...publicResult,
-                // Overall ok reflects both tiers — the origin check exists
-                // specifically to catch failures the public tier can't see.
-                ok: publicResult.ok && (origin ? origin.ok : true),
-                origin,
-            },
-            uid,
-        )
+        // `ok` stays the PUBLIC tier's own result — don't collapse it with
+        // origin.ok. The two tiers are different failure modes with different
+        // severity (public down = real outage; origin-only down = CDN masking
+        // a backend problem, still worth a warning). Collapsing them into one
+        // boolean loses that distinction downstream (ingest branches on
+        // `ok`/`origin.ok` separately to assign error vs warning).
+        await plugin.send({ ...publicResult, origin }, uid)
     }
 
     const endpointsOf = (plugin: MonitoringPluginBase): Endpoint[] => {
