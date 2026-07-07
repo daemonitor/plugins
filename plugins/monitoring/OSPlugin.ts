@@ -5,6 +5,16 @@ import {
 } from "os"
 import { readFileSync } from "fs"
 import { execSync } from "child_process"
+import { parseProcesses, PS_CMD, type ProcInfo } from "../../lib/processes"
+
+// Named service processes (nginx / php-fpm / db / …) running on the host.
+function collectProcesses(): ProcInfo[] {
+    try {
+        return parseProcesses(execSync(PS_CMD, { encoding: "utf8", timeout: 5000 }))
+    } catch {
+        return []
+    }
+}
 
 interface Disk {
     device: string
@@ -113,6 +123,7 @@ export function createOSPlugin() {
             freemem: freemem(),
             available: availableMem(),
             disks: collectDisks(),
+            processes: collectProcesses(),
             loadavg: loadavg(),
             uptime: uptime(),
             hostname: hostname(),

@@ -2,6 +2,7 @@ import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/Monitori
 import { exec } from "child_process"
 import { promisify } from "util"
 import { hostname } from "os"
+import { parseProcesses, PS_CMD, type ProcInfo } from "../../lib/processes"
 
 const execAsync = promisify(exec)
 const EXEC_OPTS = { maxBuffer: 32 * 1024 * 1024 }
@@ -26,6 +27,7 @@ interface Container {
   memPercent: number
   restarts: number
   exitCode: number
+  processes?: ProcInfo[]
 }
 
 /** Parse LXD memory-limit strings like "1GB", "512MiB", "2GiB" to bytes. */
@@ -109,6 +111,17 @@ export function createLxcPlugin() {
           memPercent,
           restarts: 0,
           exitCode: 0,
+        }
+
+        // Named service processes inside the container (nginx / php-fpm / db …),
+        // sampled from the host via `lxc exec` — no agent needed in the container.
+        if (running) {
+          try {
+            const { stdout: pout } = await execAsync(`${lxcBin} exec ${name} -- ${PS_CMD}`, { ...EXEC_OPTS, timeout: 8000 })
+            container.processes = parseProcesses(pout)
+          } catch {
+            container.processes = []
+          }
         }
 
         // Grouping: a user.daemonitor.group config key, else the host.
