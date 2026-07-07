@@ -33,8 +33,7 @@ function collectDisks(): Disk[] {
         // macOS: no fstype flag, `-l` restricts to local filesystems.
         const cmd = darwin ? "df -kl" : "df -PT --block-size=1"
         const out = execSync(cmd, { encoding: "utf8", timeout: 5000 })
-        const seen = new Set<string>()
-        const disks: Disk[] = []
+        const raw: Disk[] = []
         for (const line of out.split("\n").slice(1)) {
             const p = line.trim().split(/\s+/)
             if (p.length < 6) continue
@@ -47,6 +46,12 @@ function collectDisks(): Disk[] {
                 free = (Number(p[3]) || 0) * 1024
                 mount = p.slice(8).join(" ")
                 if (!device.startsWith("/dev/")) continue
+                // macOS/APFS spawns many synthetic /dev/diskNsM volumes. The real
+                // main-disk usage lives on the Data volume (the "/" snapshot reads
+                // near-empty); real external drives mount under /Volumes. Drop the
+                // rest (/System/Volumes/*, CoreSimulator, etc.).
+                if (mount === "/System/Volumes/Data") mount = "/"
+                else if (mount !== "/" && !mount.startsWith("/Volumes/")) continue
             } else {
                 // Filesystem Type 1B-blocks Used Available Capacity Mounted-on
                 device = p[0]; fstype = p[1]
@@ -57,11 +62,16 @@ function collectDisks(): Disk[] {
                 if (PSEUDO_FS.has(fstype)) continue
             }
             if (total <= 0 || device === "overlay" || device === "none" || device.startsWith("/dev/loop")) continue
-            if (seen.has(device)) continue // bind mounts of the same drive
-            seen.add(device)
-            disks.push({ device, fstype, mount, total, used, free, pct: total ? Math.round((used / total) * 100) : 0 })
+            raw.push({ device, fstype, mount, total, used, free, pct: total ? Math.round((used / total) * 100) : 0 })
         }
-        return disks.sort((a, b) => b.pct - a.pct)
+        // Dedupe by mount, keeping the fullest entry — collapses bind mounts, and on
+        // macOS picks the real Data volume over the near-empty read-only "/" snapshot.
+        const byMount = new Map<string, Disk>()
+        for (const d of raw) {
+            const cur = byMount.get(d.mount)
+            if (!cur || d.used > cur.used) byMount.set(d.mount, d)
+        }
+        return Array.from(byMount.values()).sort((a, b) => b.pct - a.pct)
     } catch {
         return []
     }
