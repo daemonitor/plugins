@@ -184,7 +184,7 @@ export function createWebsitePlugin() {
         await plugin.send({ ...publicResult, origin }, uid)
     }
 
-    const endpointsOf = (plugin: MonitoringPluginBase): Endpoint[] => {
+    const localEndpointsOf = (plugin: MonitoringPluginBase): Endpoint[] => {
         const cfg = plugin.config || {}
         if (Array.isArray(cfg.endpoints)) return cfg.endpoints
         if (cfg.url) {
@@ -201,8 +201,44 @@ export function createWebsitePlugin() {
         return []
     }
 
+    // Server-managed endpoints: when the config carries a `configUrl` (the
+    // daemonitor /api/monitors/for-client endpoint) and this client's
+    // `systemKey`, monitors edited in the UI are pulled from there. The last
+    // successful fetch is cached so a transient network/API failure keeps the
+    // previous set running instead of silently dropping every check.
+    let lastRemote: Endpoint[] | null = null
+    const remoteEndpointsOf = async (plugin: MonitoringPluginBase): Promise<Endpoint[] | null> => {
+        const cfg = plugin.config || {}
+        const configUrl: string | undefined = cfg.configUrl
+        const systemKey: string | undefined = cfg.systemKey
+        if (!configUrl || !systemKey) return null
+        try {
+            const res = await fetch(configUrl, { headers: { "x-system-key": systemKey } })
+            if (!res.ok) return lastRemote
+            const body = await res.json()
+            const eps = Array.isArray(body?.endpoints) ? (body.endpoints as Endpoint[]) : []
+            lastRemote = eps
+            return eps
+        } catch {
+            return lastRemote
+        }
+    }
+
+    const endpointsOf = async (plugin: MonitoringPluginBase): Promise<Endpoint[]> => {
+        const local = localEndpointsOf(plugin)
+        const remote = await remoteEndpointsOf(plugin)
+        if (remote == null) return local
+        // Merge by name/url: server-managed monitors win, local-only ones
+        // (defined directly in the config file) are kept alongside.
+        const key = (e: Endpoint) => `${e.name || ""}|${e.url}`
+        const merged = new Map<string, Endpoint>()
+        for (const e of local) merged.set(key(e), e)
+        for (const e of remote) merged.set(key(e), e)
+        return [...merged.values()]
+    }
+
     const refreshFn = async (plugin: MonitoringPluginBase): Promise<void> => {
-        const eps = endpointsOf(plugin)
+        const eps = await endpointsOf(plugin)
         for (const ep of eps) {
             if (ep?.url) await check(plugin, ep)
         }
