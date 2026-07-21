@@ -80,6 +80,18 @@ function parseNum(s: string | null): number | undefined {
   return m ? Number(m[1]) : undefined
 }
 
+// net-snmp renders octet strings that contain a NUL/non-printable byte (e.g. HP's
+// NUL-terminated "Black Cartridge 81A HP CF281A\0") as space-separated hex.
+// Decode that back to text, and strip control chars from any value.
+function decodeSnmp(s: string): string {
+  const t = s.trim()
+  if (/^([0-9A-Fa-f]{2})(\s+[0-9A-Fa-f]{2})+\s*$/.test(t)) {
+    const bytes = t.split(/\s+/).map((h) => parseInt(h, 16))
+    return Buffer.from(bytes).toString("latin1").replace(/[\x00-\x1f\x7f]+/g, "").trim()
+  }
+  return t.replace(/[\x00-\x1f\x7f]+/g, "").trim()
+}
+
 async function snmpGet(t: SnmpTarget, oid: string, timeout = 8000): Promise<string | null> {
   try {
     const { stdout } = await pexec(
@@ -87,8 +99,9 @@ async function snmpGet(t: SnmpTarget, oid: string, timeout = 8000): Promise<stri
       ["-v", t.version || "2c", "-c", t.community || "public", "-Ovq", "-t", "2", "-r", "1", t.ip, oid],
       { timeout },
     )
-    const v = stdout.trim().replace(/^"|"$/g, "")
-    return v && !/No Such|no response|Timeout/i.test(v) ? v : null
+    const raw = stdout.trim().replace(/^"|"$/g, "")
+    if (!raw || /No Such|no response|Timeout/i.test(raw)) return null
+    return decodeSnmp(raw)
   } catch {
     return null
   }
@@ -101,7 +114,7 @@ async function snmpWalk(t: SnmpTarget, oid: string, timeout = 10000): Promise<st
       ["-v", t.version || "2c", "-c", t.community || "public", "-Oqv", "-t", "2", "-r", "1", t.ip, oid],
       { timeout },
     )
-    return stdout.split("\n").map((l) => l.trim().replace(/^"|"$/g, "")).filter(Boolean)
+    return stdout.split("\n").map((l) => decodeSnmp(l.trim().replace(/^"|"$/g, ""))).filter(Boolean)
   } catch {
     return []
   }
