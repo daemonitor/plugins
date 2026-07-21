@@ -156,9 +156,14 @@ function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number): { fin
     }
     // A .php under uploads is never legitimate; under a plugin dir it's only
     // suspicious with a command-style or base64 query (webshell invocation).
+    // BUT only a SUCCESSFUL (2xx) response means the PHP actually executed —
+    // every WP site is probed constantly for my.php / academy.php / etc., and
+    // those hits 404 (not there) or 403 (WAF-blocked). Alerting on the probes
+    // is pure noise; alert only when the shell actually RAN.
+    const executed = e.status >= 200 && e.status < 300
     const isUploadsPhp = UPLOADS_PHP.test(pathNoQuery)
     const isPluginShell = PLUGIN_PHP.test(pathNoQuery) && (SUSPICIOUS_QUERY.test(query) || BASE64_BLOB.test(query))
-    if (isUploadsPhp || isPluginShell) {
+    if ((isUploadsPhp || isPluginShell) && executed) {
       const cur = webshell.get(pathNoQuery) || { ip: e.ip, count: 0 }
       cur.count++
       webshell.set(pathNoQuery, cur)
