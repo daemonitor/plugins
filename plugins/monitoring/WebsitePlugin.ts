@@ -95,10 +95,19 @@ function rawGet(target: string, opts: { host?: string; headers?: Record<string, 
 }
 
 function evaluate(body: string, status: number, expected: string[], unexpected: string[], expectedStatusCode?: number) {
-    const hasAllExpectedStrings = expected.every((s) => body.indexOf(s) !== -1)
-    const hasAnyUnexpectedStrings = unexpected.some((s) => body.indexOf(s) !== -1)
+    // Report WHICH strings matched/went missing, not just booleans. For security
+    // checks (injected-script IOCs, webshell markers, defacement canaries) the
+    // alert is only actionable if it names the offending string — "IOC _ea_s
+    // matched" vs. an opaque "check failed". `unexpectedStrings` doubles as an
+    // IOC list; `expectedStrings` doubles as an integrity canary (its absence =
+    // possible defacement). Kept as substring matches (no regex) to preserve the
+    // existing config contract.
+    const missingExpected = expected.filter((s) => body.indexOf(s) === -1)
+    const matchedUnexpected = unexpected.filter((s) => body.indexOf(s) !== -1)
+    const hasAllExpectedStrings = missingExpected.length === 0
+    const hasAnyUnexpectedStrings = matchedUnexpected.length > 0
     const statusOk = expectedStatusCode ? status === expectedStatusCode : status >= 200 && status < 400
-    return { ok: statusOk && hasAllExpectedStrings && !hasAnyUnexpectedStrings, hasAllExpectedStrings, hasAnyUnexpectedStrings }
+    return { ok: statusOk && hasAllExpectedStrings && !hasAnyUnexpectedStrings, hasAllExpectedStrings, hasAnyUnexpectedStrings, missingExpected, matchedUnexpected }
 }
 
 async function checkOrigin(ep: Endpoint): Promise<any> {
@@ -113,14 +122,14 @@ async function checkOrigin(ep: Endpoint): Promise<any> {
     if (r.error) {
         return { url: oc.url, host: oc.host, status: r.status, duration: r.duration, ok: false, error: r.error }
     }
-    const { ok, hasAllExpectedStrings, hasAnyUnexpectedStrings } = evaluate(
+    const { ok, hasAllExpectedStrings, hasAnyUnexpectedStrings, missingExpected, matchedUnexpected } = evaluate(
         r.body,
         r.status,
         oc.expectedStrings ?? ep.expectedStrings ?? [],
         oc.unexpectedStrings ?? ep.unexpectedStrings ?? [],
         oc.expectedStatusCode ?? ep.expectedStatusCode,
     )
-    return { url: oc.url, host: oc.host, status: r.status, duration: r.duration, ok, hasAllExpectedStrings, hasAnyUnexpectedStrings }
+    return { url: oc.url, host: oc.host, status: r.status, duration: r.duration, ok, hasAllExpectedStrings, hasAnyUnexpectedStrings, missingExpected, matchedUnexpected }
 }
 
 // HTTP uptime/content checks. Emits one client_state per endpoint, matching the
@@ -144,7 +153,7 @@ export function createWebsitePlugin() {
             const body = await res.text()
             const duration = Date.now() - start
 
-            const { ok, hasAllExpectedStrings, hasAnyUnexpectedStrings } = evaluate(
+            const { ok, hasAllExpectedStrings, hasAnyUnexpectedStrings, missingExpected, matchedUnexpected } = evaluate(
                 body,
                 res.status,
                 ep.expectedStrings || [],
@@ -161,6 +170,8 @@ export function createWebsitePlugin() {
                 redirected: res.redirected,
                 hasAllExpectedStrings,
                 hasAnyUnexpectedStrings,
+                missingExpected,
+                matchedUnexpected,
             }
         } catch (err) {
             publicResult = {
