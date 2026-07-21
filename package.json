@@ -1,13 +1,14 @@
 {
   "name": "@daemonitor/plugins",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "daemonitor plugins",
   "types": "types/index.d.ts",
   "main": "index.ts",
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepublishOnly": "npm run build"
   },
   "files": [
     "dist",
@@ -35,20 +36,22 @@
   "license": "ISC",
   "packageManager": "pnpm@8.2.0",
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "nuxt": "^3.15.4",
+    "typescript": "^5.8.3",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
   "dependencies": {
+    "@daemonitor/common": "^1.0.0",
     "dotenv": "^16.0.3",
     "ewelink-api": "^3.1.1",
     "node-machine-id": "^1.1.12",
     "ohmyfetch": "^0.4.21",
+    "pm2": "^6.0.5",
     "string-to-color": "^2.2.2",
     "ts-node": "^10.9.1",
-    "@daemonitor/common": "^1.0.0",
-    "tsconfig-paths": "^4.2.0",
-    "pm2": "^6.0.5"
+    "tsconfig-paths": "^4.2.0"
   },
   "repository": {
     "type": "git",

@@ -24,13 +24,17 @@
       "./node_modules/@types",
       "./types"
     ],
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "skipLibCheck": true
   },
   "include": [
-    "**/*.ts",
-    "../daemonitor-frontend/.nuxt/types/imports.d.ts",
+    "**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "nuxt.config.ts",
+    "plugins/monitoring/CloudflarePlugin.ts",
+    "plugins/monitoring/EwelinkPlugin.ts",
+    "plugins/monitoring/MongoDBPlugin.ts"
   ],
 }
