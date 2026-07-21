@@ -64,6 +64,10 @@ function slug(s: string): string {
 async function wp(site: WpSite, args: string[], timeout = 15000): Promise<string> {
   const bin = site.wpCli || "wp"
   const full = [...args, `--path=${site.path}`]
+  // Pass --url when known: some wp-config.php files read $_SERVER['SERVER_NAME'],
+  // which is undefined under WP-CLI and emits PHP warnings that corrupt JSON
+  // output; --url populates the server context. Also correct for multisite.
+  if (site.url) full.push(`--url=${site.url}`)
   if (site.runAs) {
     const { stdout } = await pexec("sudo", ["-n", "-u", site.runAs, bin, ...full], { timeout, maxBuffer: 8 * 1024 * 1024 })
     return stdout
