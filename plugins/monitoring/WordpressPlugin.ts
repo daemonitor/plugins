@@ -21,10 +21,16 @@ const pexec = promisify(execFile)
 
 interface WpSite {
   name?: string // display label; defaults to the host dir name
-  path: string // absolute WordPress root (where wp-config.php lives)
-  url?: string // public URL, for reference/deep-linking only
+  path: string // absolute WordPress root (where wp-config.php lives), IN the
+               // container's namespace when `lxc` is set
+  url?: string // public URL; also passed as wp --url (fixes SERVER_NAME warnings)
   wpCli?: string // wp binary (default "wp")
   runAs?: string // OS user to run wp-cli as (via sudo -u); WP-CLI refuses root
+  // The site actually runs inside this LXC container (nginx reverse-proxies to
+  // it). Commands are then run via `lxc exec <lxc> -- …` so wp-cli reaches the
+  // container's DB (the host's wp-config points at a DB only resolvable inside).
+  lxc?: string
+  lxcBin?: string // lxc binary path (default "lxc"; e.g. /snap/bin/lxc on snap installs)
   cronUser?: string // crontab -u target (default "www-data")
   muPluginsAllowlist?: string[] // known-good mu-plugin filenames
   criticalPages?: string[] // slugs whose trashing = alert (login, home, ...)
@@ -39,6 +45,8 @@ interface WpConfig {
   url?: string
   wpCli?: string
   runAs?: string
+  lxc?: string
+  lxcBin?: string
   cronUser?: string
   muPluginsAllowlist?: string[]
   criticalPages?: string[]
@@ -59,21 +67,38 @@ function slug(s: string): string {
   return s.replace(/[^a-zA-Z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "")
 }
 
-// Run `wp <args>` in the site root, optionally as another OS user (WP-CLI won't
-// run as root). Returns stdout, or throws — callers isolate their own failures.
-async function wp(site: WpSite, args: string[], timeout = 15000): Promise<string> {
-  const bin = site.wpCli || "wp"
-  const full = [...args, `--path=${site.path}`]
-  // Pass --url when known: some wp-config.php files read $_SERVER['SERVER_NAME'],
-  // which is undefined under WP-CLI and emits PHP warnings that corrupt JSON
-  // output; --url populates the server context. Also correct for multisite.
-  if (site.url) full.push(`--url=${site.url}`)
-  if (site.runAs) {
-    const { stdout } = await pexec("sudo", ["-n", "-u", site.runAs, bin, ...full], { timeout, maxBuffer: 8 * 1024 * 1024 })
+const MAXBUF = 8 * 1024 * 1024
+
+// Run a command in the site's context — inside its LXC container when `lxc` is
+// set (via `sudo -n lxc exec <c> -- …`), else on the host (optionally as
+// `runAs`). Returns stdout, or throws — callers isolate their own failures.
+async function execInSite(site: WpSite, argv: string[], timeout = 15000): Promise<string> {
+  if (site.lxc) {
+    const lxcBin = site.lxcBin || "lxc"
+    const { stdout } = await pexec("sudo", ["-n", lxcBin, "exec", site.lxc, "--", ...argv], { timeout, maxBuffer: MAXBUF })
     return stdout
   }
-  const { stdout } = await pexec(bin, full, { timeout, maxBuffer: 8 * 1024 * 1024 })
+  if (site.runAs) {
+    const { stdout } = await pexec("sudo", ["-n", "-u", site.runAs, ...argv], { timeout, maxBuffer: MAXBUF })
+    return stdout
+  }
+  const { stdout } = await pexec(argv[0], argv.slice(1), { timeout, maxBuffer: MAXBUF })
   return stdout
+}
+
+// Run `wp <args>` in the site's context. Adds:
+//  --skip-plugins/--skip-themes so a plugin/theme's PHP notices don't get
+//    printed onto stdout ahead of the JSON and break the parse;
+//  --url when known (fixes wp-config reads of $_SERVER['SERVER_NAME']; also
+//    correct for multisite);
+//  --allow-root when running via `lxc exec` (that lands as root in the
+//    container, and WP-CLI refuses root without it).
+async function wp(site: WpSite, args: string[], timeout = 15000): Promise<string> {
+  const bin = site.wpCli || "wp"
+  const full = [...args, `--path=${site.path}`, "--skip-plugins", "--skip-themes"]
+  if (site.url) full.push(`--url=${site.url}`)
+  if (site.lxc) full.push("--allow-root")
+  return execInSite(site, [bin, ...full], timeout)
 }
 
 function parseJsonSafe<T>(s: string, fallback: T): T {
@@ -135,10 +160,18 @@ async function collectSite(site: WpSite): Promise<any> {
   }
 
   // 4. mu-plugins auto-load with no UI to disable them — a favorite persistence
-  // spot. Report every .php and which ones aren't in the allowlist.
+  // spot. Report every .php and which ones aren't in the allowlist. Read via the
+  // container when the site is LXC (the path is inside the container's fs).
   try {
     const dir = path.join(site.path, "wp-content", "mu-plugins")
-    const entries = await readdir(dir)
+    let entries: string[]
+    if (site.lxc) {
+      // `ls -1` inside the container; empty/no-dir → treat as no mu-plugins.
+      const out2 = await execInSite(site, ["ls", "-1", dir], 8000).catch(() => "")
+      entries = out2.split("\n").map((s) => s.trim()).filter(Boolean)
+    } else {
+      entries = await readdir(dir)
+    }
     const php = entries.filter((f) => f.toLowerCase().endsWith(".php"))
     out.muPlugins = php
     if (site.muPluginsAllowlist) {
@@ -156,6 +189,16 @@ async function collectSite(site: WpSite): Promise<any> {
   // not an error — anything else (still denied) is a real collection failure.
   const cronUser = site.cronUser || "www-data"
   const readCron = async (): Promise<string> => {
+    // LXC: the web user's crontab lives INSIDE the container (that's where the
+    // persistence would be dropped), so read it there.
+    if (site.lxc) {
+      try {
+        return await execInSite(site, ["crontab", "-l", "-u", cronUser], 8000)
+      } catch (e2: any) {
+        if (/no crontab for/i.test(String(e2?.stderr || e2?.message || ""))) return ""
+        throw e2
+      }
+    }
     try {
       return (await pexec("crontab", ["-l", "-u", cronUser], { timeout: 8000 })).stdout
     } catch (e: any) {
@@ -199,6 +242,8 @@ export function createWordpressPlugin() {
         url: cfg.url,
         wpCli: cfg.wpCli,
         runAs: cfg.runAs,
+        lxc: cfg.lxc,
+        lxcBin: cfg.lxcBin,
         cronUser: cfg.cronUser,
         muPluginsAllowlist: cfg.muPluginsAllowlist,
         criticalPages: cfg.criticalPages,
