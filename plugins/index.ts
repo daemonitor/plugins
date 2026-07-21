@@ -7,6 +7,7 @@ import { createWebsitePlugin } from "./monitoring/WebsitePlugin"
 import { createWordpressPlugin } from "./monitoring/WordpressPlugin"
 import { createLogWatchPlugin } from "./monitoring/LogWatchPlugin"
 import { createNetScanPlugin } from "./monitoring/NetScanPlugin"
+import { createSnmpPlugin } from "./monitoring/SnmpPlugin"
 
 // In future, implement other plugin factory functions using the same pattern
 // import { createOSPlugin } from "./monitoring/OSPlugin"
@@ -27,6 +28,7 @@ export default {
     Wordpress: createWordpressPlugin,
     Logwatch: createLogWatchPlugin,
     Netscan: createNetScanPlugin,
+    Snmp: createSnmpPlugin,
     // CloudflarePlugin: createCloudflarePlugin,
     // EwelinkPlugin: createEwelinkPlugin,
     // MongoDBPlugin: createMongoDBPlugin,
