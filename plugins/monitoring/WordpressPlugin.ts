@@ -146,27 +146,37 @@ async function collectSite(site: WpSite): Promise<any> {
   }
 
   // 5. Web user's crontab — www-data should almost never have one; the attacker
-  // used it to re-drop webshells every 5 min. Non-empty = alert. Needs root; if
-  // denied we report the error rather than a false "clean".
+  // used it to re-drop webshells every 5 min. Non-empty = alert. `crontab -u`
+  // needs privilege: try direct first, then `sudo -n` (the agent user typically
+  // has passwordless sudo). "no crontab for <user>" is the HEALTHY empty case,
+  // not an error — anything else (still denied) is a real collection failure.
   const cronUser = site.cronUser || "www-data"
+  const readCron = async (): Promise<string> => {
+    try {
+      return (await pexec("crontab", ["-l", "-u", cronUser], { timeout: 8000 })).stdout
+    } catch (e: any) {
+      const msg = String(e?.stderr || e?.message || "")
+      if (/no crontab for/i.test(msg)) return "" // empty is fine
+      if (/privileged|not permitted|not allowed|denied/i.test(msg)) {
+        // Retry under sudo; may itself throw "no crontab for" (empty) → catch.
+        try {
+          return (await pexec("sudo", ["-n", "crontab", "-l", "-u", cronUser], { timeout: 8000 })).stdout
+        } catch (e2: any) {
+          if (/no crontab for/i.test(String(e2?.stderr || e2?.message || ""))) return ""
+          throw e2
+        }
+      }
+      throw e
+    }
+  }
   try {
-    const { stdout } = await pexec("crontab", ["-l", "-u", cronUser], { timeout: 8000 })
+    const stdout = await readCron()
     const lines = stdout.split("\n").filter((l) => l.trim() && !l.trim().startsWith("#"))
     out.webUserCrontab = lines.join("\n") || null
     out.hasWebUserCrontab = lines.length > 0
     out.cronUser = cronUser
   } catch (e: any) {
-    // `crontab -l` exits non-zero with "no crontab for <user>" when empty — that
-    // is the healthy case, not an error. Anything else (e.g. permission) is a
-    // real collection failure worth surfacing.
-    const msg = String(e?.stderr || e?.message || e)
-    if (/no crontab for/i.test(msg)) {
-      out.webUserCrontab = null
-      out.hasWebUserCrontab = false
-      out.cronUser = cronUser
-    } else {
-      out.cronError = msg.slice(0, 160)
-    }
+    out.cronError = String(e?.stderr || e?.message || e).slice(0, 160)
   }
 
   return out
