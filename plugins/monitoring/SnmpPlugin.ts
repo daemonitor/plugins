@@ -16,10 +16,12 @@ const pexec = promisify(execFile)
 interface SnmpTarget {
   name: string
   ip: string
-  kind?: "printer" | "switch" | "device"
+  kind?: "printer" | "switch" | "device" | "qnap"
   community?: string // default "public"
   version?: "1" | "2c" // default 2c
   tonerWarnPct?: number // supply level at/under this = warning (default 10)
+  volumeWarnPct?: number // volume fullness at/over this = warning (default 90)
+  tempWarnC?: number // cpu/disk temp at/over this = warning (default 70)
 }
 
 interface SnmpConfig {
@@ -50,8 +52,32 @@ const SYS = {
   ifAdmin: "1.3.6.1.2.1.2.2.1.7", // ifAdminStatus (walk): 1=up (enabled)
 }
 
+// QNAP enterprise MIB (NAS-MIB, 1.3.6.1.4.1.24681.1.2). A full walk of this
+// subtree times out on QTS, so everything here is fetched by exact OID.
+const QNAP = {
+  cpuUsage: "1.3.6.1.4.1.24681.1.2.1.0",   // systemCPU-Usage e.g. "3.5 %"
+  cpuTemp: "1.3.6.1.4.1.24681.1.2.5.0",    // cpu-Temperature e.g. "67 C/152 F"
+  sysTemp: "1.3.6.1.4.1.24681.1.2.6.0",    // systemTemperature
+  model: "1.3.6.1.4.1.24681.1.2.12.0",     // e.g. "TS-963X"
+  hdNumber: "1.3.6.1.4.1.24681.1.2.10.0",  // installed disk count
+  hdDescr: "1.3.6.1.4.1.24681.1.2.11.1.2.",  // + index
+  hdTemp: "1.3.6.1.4.1.24681.1.2.11.1.3.",
+  hdStatus: "1.3.6.1.4.1.24681.1.2.11.1.4.", // 0 = ready/ok
+  hdSmart: "1.3.6.1.4.1.24681.1.2.11.1.7.",  // "GOOD" / "Warning"
+}
+
 function slug(s: string): string {
   return s.replace(/[^a-zA-Z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "")
+}
+
+// QNAP reports temps as "67 C/152 F" and percentages as "3.5 %" — pull the number.
+function parseC(s: string | null): number | undefined {
+  const m = /(-?\d+(?:\.\d+)?)\s*C/.exec(s || "")
+  return m ? Math.round(Number(m[1])) : undefined
+}
+function parseNum(s: string | null): number | undefined {
+  const m = /(-?\d+(?:\.\d+)?)/.exec(s || "")
+  return m ? Number(m[1]) : undefined
 }
 
 async function snmpGet(t: SnmpTarget, oid: string, timeout = 8000): Promise<string | null> {
@@ -165,6 +191,81 @@ async function collectDevice(t: SnmpTarget): Promise<any> {
   }
 }
 
+// Walk that keeps each row's index (numeric OID suffix) — needed to resolve the
+// hrStorage table entries for the data volumes.
+async function snmpWalkIndexed(t: SnmpTarget, oid: string, timeout = 10000): Promise<{ idx: string; val: string }[]> {
+  try {
+    const { stdout } = await pexec(
+      "snmpwalk",
+      ["-v", t.version || "2c", "-c", t.community || "public", "-On", "-t", "2", "-r", "1", t.ip, oid],
+      { timeout },
+    )
+    return stdout.split("\n").map((l) => {
+      const m = /^(\S+)\s*=\s*[^:]+:\s*(.*)$/.exec(l.trim())
+      if (!m) return null
+      const idx = m[1].startsWith(oid) ? m[1].slice(oid.length).replace(/^\./, "") : m[1]
+      return { idx, val: m[2].trim().replace(/^"|"$/g, "") }
+    }).filter(Boolean) as { idx: string; val: string }[]
+  } catch {
+    return []
+  }
+}
+
+// QNAP NAS: CPU load, cpu/system temps, per-disk health + temp, and data-volume
+// fullness. Uses the QNAP enterprise MIB by exact OID (walk times out) plus
+// HOST-RESOURCES for CPU load and volume sizes.
+async function collectQnap(t: SnmpTarget): Promise<any> {
+  const tempWarn = t.tempWarnC ?? 70
+  const volWarn = t.volumeWarnPct ?? 90
+  const [model, cpuTemp, sysTemp, hdNumRaw, cpuLoads, storDescrs] = await Promise.all([
+    snmpGet(t, QNAP.model),
+    snmpGet(t, QNAP.cpuTemp),
+    snmpGet(t, QNAP.sysTemp),
+    snmpGet(t, QNAP.hdNumber),
+    snmpWalk(t, "1.3.6.1.2.1.25.3.3.1.2"), // hrProcessorLoad (per core)
+    snmpWalkIndexed(t, "1.3.6.1.2.1.25.2.3.1.3"),                  // hrStorageDescr
+  ])
+  if (model == null && cpuTemp == null && !cpuLoads.length) {
+    return { name: t.name, ip: t.ip, kind: "qnap", reachable: false }
+  }
+
+  // CPU: average per-core load.
+  const cores = cpuLoads.map(Number).filter((n) => !isNaN(n))
+  const cpuPct = cores.length ? Math.round(cores.reduce((a, b) => a + b, 0) / cores.length) : undefined
+
+  // Disks — iterate 1..hdNumber (bounded).
+  const hdN = Math.min(Number(hdNumRaw) || 0, 24)
+  const disks: any[] = []
+  for (let i = 1; i <= hdN; i++) {
+    const [st, tp, sm, ds] = await Promise.all([
+      snmpGet(t, QNAP.hdStatus + i), snmpGet(t, QNAP.hdTemp + i), snmpGet(t, QNAP.hdSmart + i), snmpGet(t, QNAP.hdDescr + i),
+    ])
+    if (st == null && tp == null) continue
+    disks.push({ slot: i, descr: ds || undefined, tempC: parseC(tp), status: st != null ? Number(st) : undefined, smart: sm || undefined })
+  }
+  const badDisks = disks.filter((d) => (d.status != null && d.status !== 0) || (d.smart && !/good|normal/i.test(d.smart)) || (d.tempC != null && d.tempC >= tempWarn))
+
+  // Volumes — the CACHEDEVn_DATA mounts from hrStorage.
+  const volumes: any[] = []
+  for (const row of storDescrs.filter((r) => /CACHEDEV\d+_DATA$/.test(r.val))) {
+    const [units, size, used] = await Promise.all([
+      snmpGet(t, `1.3.6.1.2.1.25.2.3.1.4.${row.idx}`), snmpGet(t, `1.3.6.1.2.1.25.2.3.1.5.${row.idx}`), snmpGet(t, `1.3.6.1.2.1.25.2.3.1.6.${row.idx}`),
+    ])
+    const u = parseNum(units) || 1, sz = parseNum(size) || 0, us = parseNum(used) || 0
+    if (sz > 0) volumes.push({ mount: row.val, totalGB: Math.round((sz * u) / 1e9), usedGB: Math.round((us * u) / 1e9), pct: Math.round((us / sz) * 100) })
+  }
+  const fullVols = volumes.filter((v) => v.pct >= volWarn)
+
+  return {
+    name: t.name, ip: t.ip, kind: "qnap", reachable: true,
+    model: model || undefined,
+    cpuPct, cpuTempC: parseC(cpuTemp), sysTempC: parseC(sysTemp),
+    disks, badDisks: badDisks.map((d) => ({ slot: d.slot, status: d.status, smart: d.smart, tempC: d.tempC })),
+    volumes, fullVolumes: fullVols,
+    tempWarnC: tempWarn, volumeWarnPct: volWarn,
+  }
+}
+
 export function createSnmpPlugin() {
   let refreshTimer: any = null
 
@@ -179,7 +280,10 @@ export function createSnmpPlugin() {
     await Promise.all(
       targetsOf(plugin).map(async (t) => {
         try {
-          const data = t.kind === "printer" || !t.kind ? await collectPrinter(t) : await collectDevice(t)
+          const data =
+            t.kind === "qnap" ? await collectQnap(t)
+              : t.kind === "printer" || !t.kind ? await collectPrinter(t)
+                : await collectDevice(t)
           await plugin.send(data, `snmp-${slug(t.name || t.ip)}`)
         } catch (e: any) {
           await plugin.send({ name: t.name, ip: t.ip, kind: t.kind || "printer", error: String(e?.message || e).slice(0, 160) }, `snmp-${slug(t.name || t.ip)}`)
