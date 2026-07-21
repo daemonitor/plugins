@@ -203,7 +203,9 @@ async function snmpWalkIndexed(t: SnmpTarget, oid: string, timeout = 10000): Pro
     return stdout.split("\n").map((l) => {
       const m = /^(\S+)\s*=\s*[^:]+:\s*(.*)$/.exec(l.trim())
       if (!m) return null
-      const idx = m[1].startsWith(oid) ? m[1].slice(oid.length).replace(/^\./, "") : m[1]
+      // snmpwalk -On emits a leading dot (".1.3.6…") the bare OID lacks.
+      const clean = m[1].replace(/^\./, "")
+      const idx = clean.startsWith(oid) ? clean.slice(oid.length).replace(/^\./, "") : clean
       return { idx, val: m[2].trim().replace(/^"|"$/g, "") }
     }).filter(Boolean) as { idx: string; val: string }[]
   } catch {
@@ -240,10 +242,19 @@ async function collectQnap(t: SnmpTarget): Promise<any> {
     const [st, tp, sm, ds] = await Promise.all([
       snmpGet(t, QNAP.hdStatus + i), snmpGet(t, QNAP.hdTemp + i), snmpGet(t, QNAP.hdSmart + i), snmpGet(t, QNAP.hdDescr + i),
     ])
-    if (st == null && tp == null) continue
-    disks.push({ slot: i, descr: ds || undefined, tempC: parseC(tp), status: st != null ? Number(st) : undefined, smart: sm || undefined })
+    const status = st != null ? Number(st) : undefined
+    const tempC = parseC(tp)
+    // Empty bay: no readable temp and a non-ready (negative/absent, e.g. -5)
+    // status. Skip it — an empty slot isn't a failed disk.
+    if (tempC == null && (status == null || status < 0)) continue
+    disks.push({ slot: i, descr: ds || undefined, tempC, status, smart: sm && sm !== "--" ? sm : undefined })
   }
-  const badDisks = disks.filter((d) => (d.status != null && d.status !== 0) || (d.smart && !/good|normal/i.test(d.smart)) || (d.tempC != null && d.tempC >= tempWarn))
+  // A present disk is bad only on a real error status, an explicitly-bad SMART
+  // verdict, or overheating — not a blank "--" or an empty bay.
+  const badDisks = disks.filter((d) =>
+    (d.status != null && d.status !== 0) ||
+    (typeof d.smart === "string" && /warn|abnormal|fail|error|bad|caution/i.test(d.smart)) ||
+    (d.tempC != null && d.tempC >= tempWarn))
 
   // Volumes — the CACHEDEVn_DATA mounts from hrStorage.
   const volumes: any[] = []
