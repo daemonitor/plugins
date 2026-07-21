@@ -195,7 +195,12 @@ async function collectSite(site: WpSite): Promise<any> {
       try {
         return await execInSite(site, ["crontab", "-l", "-u", cronUser], 8000)
       } catch (e2: any) {
-        if (/no crontab for/i.test(String(e2?.stderr || e2?.message || ""))) return ""
+        const msg = String(e2?.stderr || e2?.message || "")
+        // "no crontab for" = empty (healthy). "cannot use this program" /
+        // "not allowed to use" = the user is denied crontab entirely
+        // (cron.deny / not in cron.allow) — that's GOOD posture (can't be used
+        // for persistence), not a collection failure. Treat both as clean.
+        if (/no crontab for|cannot use this program|not allowed to use/i.test(msg)) return ""
         throw e2
       }
     }
