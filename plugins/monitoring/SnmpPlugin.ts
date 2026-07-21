@@ -16,7 +16,7 @@ const pexec = promisify(execFile)
 interface SnmpTarget {
   name: string
   ip: string
-  kind?: "printer" // more kinds (switch, ups, …) later
+  kind?: "printer" | "switch" | "device"
   community?: string // default "public"
   version?: "1" | "2c" // default 2c
   tonerWarnPct?: number // supply level at/under this = warning (default 10)
@@ -40,6 +40,15 @@ const OID = {
 }
 
 const PRINTER_STATUS: Record<string, string> = { "1": "other", "2": "unknown", "3": "idle", "4": "printing", "5": "warmup" }
+
+// Generic SYSTEM / IF-MIB OIDs (switches, APs, anything SNMP-capable).
+const SYS = {
+  descr: "1.3.6.1.2.1.1.1.0",   // sysDescr
+  uptime: "1.3.6.1.2.1.1.3.0",  // sysUpTime (timeticks, 1/100s)
+  name: "1.3.6.1.2.1.1.5.0",    // sysName
+  ifOper: "1.3.6.1.2.1.2.2.1.8", // ifOperStatus (walk): 1=up 2=down
+  ifAdmin: "1.3.6.1.2.1.2.2.1.7", // ifAdminStatus (walk): 1=up (enabled)
+}
 
 function slug(s: string): string {
   return s.replace(/[^a-zA-Z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "")
@@ -117,6 +126,45 @@ async function collectPrinter(t: SnmpTarget): Promise<any> {
   }
 }
 
+// Generic SNMP device (switch/AP/…): identity, uptime, and enabled-port link
+// state so a down uplink or dead switch surfaces. Reachability via SNMP is more
+// reliable than ICMP — many devices drop ping but answer SNMP.
+async function collectDevice(t: SnmpTarget): Promise<any> {
+  const [descr, name, uptimeRaw, oper, admin] = await Promise.all([
+    snmpGet(t, SYS.descr),
+    snmpGet(t, SYS.name),
+    snmpGet(t, SYS.uptime),
+    snmpWalk(t, SYS.ifOper),
+    snmpWalk(t, SYS.ifAdmin),
+  ])
+  if (descr == null && name == null && !oper.length) {
+    return { name: t.name, ip: t.ip, kind: t.kind || "device", reachable: false }
+  }
+  // Only count ADMIN-enabled ports; an enabled port that's operationally down is
+  // a real link-down (ignore the many disabled ports on a big switch).
+  let portsTotal = 0
+  let portsUp = 0
+  for (let i = 0; i < oper.length; i++) {
+    if (Number(admin[i]) === 1) {
+      portsTotal++
+      if (Number(oper[i]) === 1) portsUp++
+    }
+  }
+  // sysUpTime timeticks → seconds
+  const upSecs = uptimeRaw != null ? Math.round((Number(String(uptimeRaw).replace(/[^0-9]/g, "")) || 0) / 100) : undefined
+  return {
+    name: t.name,
+    ip: t.ip,
+    kind: t.kind || "device",
+    reachable: true,
+    sysDescr: descr || undefined,
+    sysName: name || undefined,
+    uptimeSecs: upSecs,
+    portsUp,
+    portsTotal,
+  }
+}
+
 export function createSnmpPlugin() {
   let refreshTimer: any = null
 
@@ -131,7 +179,7 @@ export function createSnmpPlugin() {
     await Promise.all(
       targetsOf(plugin).map(async (t) => {
         try {
-          const data = t.kind === "printer" || !t.kind ? await collectPrinter(t) : { name: t.name, ip: t.ip, kind: t.kind }
+          const data = t.kind === "printer" || !t.kind ? await collectPrinter(t) : await collectDevice(t)
           await plugin.send(data, `snmp-${slug(t.name || t.ip)}`)
         } catch (e: any) {
           await plugin.send({ name: t.name, ip: t.ip, kind: t.kind || "printer", error: String(e?.message || e).slice(0, 160) }, `snmp-${slug(t.name || t.ip)}`)
