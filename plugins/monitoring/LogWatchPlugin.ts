@@ -57,16 +57,30 @@ interface Entry {
 // log) can't blow up memory — read at most the last MAX_READ bytes.
 const MAX_READ = 5 * 1024 * 1024
 
-// Combined log format:
-//   IP - user [time] "METHOD target proto" status bytes "ref" "ua"
-const COMBINED = /^(\S+) \S+ \S+ \[[^\]]*\] "([A-Z]+) ([^ "]+)[^"]*" (\d{3})[^"]*"[^"]*" "([^"]*)"/
-// Looser fallback: just IP … "METHOD target …" status
-const LOOSE = /^(\S+).*"([A-Z]+) ([^ "]+)[^"]*" (\d{3})/
+// Field-position TOLERANT parsing. Log layouts vary a lot across these hosts:
+//   • standard combined:   `1.2.3.4 - - [t] "GET / HTTP/1.1" 200 ...`
+//   • vhost-first:          `example.com - 1.2.3.4 - - [t] "GET / HTTP/1.1" 200`
+//   • CF combined_with_host: `host - <edge_ip> - <cf_connecting_ip> - - [t] "GET .." "200"`
+// So neither the IP column NOR the status quoting is fixed. We therefore:
+//   1. pull the request + status from the quoted "$request" run (status may be
+//      bare or quoted → allow an optional leading quote), and
+//   2. take the LAST IP token BEFORE the `[timestamp]` as the client. That is
+//      the real requester in every layout here: when Cloudflare's
+//      $http_cf_connecting_ip is present it is logged AFTER $remote_addr (the CF
+//      edge), so "last IP" is the visitor, not the edge; when it's absent there
+//      is a single IP ($remote_addr) and "last" == "only".
+const REQ = /"([A-Z]+)\s+([^ "]+)[^"]*"\s+"?(\d{3})/
+const IP_TOKEN = /^(?:(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F]{0,4})$/
 
 function parseLine(line: string): Entry | null {
-  const m = COMBINED.exec(line) || LOOSE.exec(line)
-  if (!m) return null
-  return { ip: m[1], method: m[2], path: m[3], status: Number(m[4]), ua: m[5] || "" }
+  const rq = REQ.exec(line)
+  if (!rq) return null
+  const br = line.indexOf("[")
+  const pre = br > 0 ? line.slice(0, br) : line
+  const tokens = pre.split(/\s+/)
+  const ips = tokens.filter((t) => IP_TOKEN.test(t))
+  const ip = ips.length ? ips[ips.length - 1] : (tokens.find(Boolean) || "")
+  return { ip, method: rq[1], path: rq[2], status: Number(rq[3]), ua: "" }
 }
 
 const SUSPICIOUS_QUERY = /(?:^|[?&])(c|k|cmd|exec|e|q|f|file|dir|download|0|1|a)=/i
