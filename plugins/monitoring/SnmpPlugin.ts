@@ -122,32 +122,38 @@ async function snmpWalk(t: SnmpTarget, oid: string, timeout = 10000): Promise<st
 
 async function collectPrinter(t: SnmpTarget): Promise<any> {
   const warnPct = t.tonerWarnPct ?? 10
-  const [model, serial, pagesRaw, statusRaw, descs, maxes, levels] = await Promise.all([
+  // Walk LEVELS (clean numeric values, one per row) to get the supply indices,
+  // then fetch each supply's description/max by that index — a single get whose
+  // (possibly multi-line hex) value decodeSnmp handles, so a long description
+  // can't be split into phantom supplies and misalign the levels.
+  const [model, serial, pagesRaw, statusRaw, levelRows] = await Promise.all([
     snmpGet(t, OID.model),
     snmpGet(t, OID.serial),
     snmpGet(t, OID.pages),
     snmpGet(t, OID.status),
-    snmpWalk(t, OID.supplyDesc),
-    snmpWalk(t, OID.supplyMax),
-    snmpWalk(t, OID.supplyLevel),
+    snmpWalkIndexed(t, OID.supplyLevel),
   ])
 
   // No response at all → the printer is unreachable / SNMP off.
-  if (model == null && serial == null && pagesRaw == null && !descs.length) {
+  if (model == null && serial == null && pagesRaw == null && !levelRows.length) {
     return { name: t.name, ip: t.ip, kind: "printer", reachable: false }
   }
 
-  // Pair descriptions with levels. prtMarkerSuppliesLevel semantics: -2 =
-  // unknown, -3 = "some remaining" (a level the device won't quantify); else a
-  // count out of MaxCapacity (which can itself be -2 = unknown).
-  const supplies = descs.map((desc, i) => {
-    const max = Number(maxes[i])
-    const lvl = Number(levels[i])
+  // prtMarkerSuppliesLevel semantics: -2 = unknown, -3 = "some remaining" (a
+  // level the device won't quantify); else a count out of MaxCapacity (which can
+  // itself be -2 = unknown).
+  const supplies = await Promise.all(levelRows.map(async (row) => {
+    const [descRaw, maxRaw] = await Promise.all([
+      snmpGet(t, `${OID.supplyDesc}.${row.idx}`),
+      snmpGet(t, `${OID.supplyMax}.${row.idx}`),
+    ])
+    const lvl = Number(row.val)
+    const max = Number(maxRaw)
     let pct: number | null = null
-    if (lvl === -3) pct = 100 // "ok / some remaining"
+    if (lvl === -3) pct = 100
     else if (lvl >= 0 && max > 0) pct = Math.round((lvl / max) * 100)
-    return { name: desc, level: lvl, max, pct }
-  })
+    return { name: descRaw || "supply", level: lvl, max, pct }
+  }))
   const low = supplies.filter((s) => s.pct != null && s.pct <= warnPct)
 
   return {
