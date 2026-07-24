@@ -62,8 +62,13 @@ const QNAP = {
   hdNumber: "1.3.6.1.4.1.24681.1.2.10.0",  // installed disk count
   hdDescr: "1.3.6.1.4.1.24681.1.2.11.1.2.",  // + index
   hdTemp: "1.3.6.1.4.1.24681.1.2.11.1.3.",
-  hdStatus: "1.3.6.1.4.1.24681.1.2.11.1.4.", // 0 = ready/ok
+  hdStatus: "1.3.6.1.4.1.24681.1.2.11.1.4.", // 0 = ready/ok, negative = fault/empty
+  hdModel: "1.3.6.1.4.1.24681.1.2.11.1.5.",  // "--" only when the bay is empty
+  hdCapacity: "1.3.6.1.4.1.24681.1.2.11.1.6.", // "7.28 TB" / "--"
   hdSmart: "1.3.6.1.4.1.24681.1.2.11.1.7.",  // "GOOD" / "Warning"
+  memTotal: "1.3.6.1.4.1.24681.1.2.2.0",   // "16013.4 MB"
+  memFree: "1.3.6.1.4.1.24681.1.2.3.0",    // "11984.9 MB"
+  fanSpeed: "1.3.6.1.4.1.24681.1.2.15.1.3.", // + index, "1835 RPM"
 }
 
 function slug(s: string): string {
@@ -238,13 +243,16 @@ async function snmpWalkIndexed(t: SnmpTarget, oid: string, timeout = 10000): Pro
 async function collectQnap(t: SnmpTarget): Promise<any> {
   const tempWarn = t.tempWarnC ?? 70
   const volWarn = t.volumeWarnPct ?? 90
-  const [model, cpuTemp, sysTemp, hdNumRaw, cpuLoads, storDescrs] = await Promise.all([
+  const [model, cpuTemp, sysTemp, hdNumRaw, cpuLoads, storDescrs, memTotal, memFree, fanSpeeds] = await Promise.all([
     snmpGet(t, QNAP.model),
     snmpGet(t, QNAP.cpuTemp),
     snmpGet(t, QNAP.sysTemp),
     snmpGet(t, QNAP.hdNumber),
     snmpWalk(t, "1.3.6.1.2.1.25.3.3.1.2"), // hrProcessorLoad (per core)
     snmpWalkIndexed(t, "1.3.6.1.2.1.25.2.3.1.3"),                  // hrStorageDescr
+    snmpGet(t, QNAP.memTotal),
+    snmpGet(t, QNAP.memFree),
+    snmpWalk(t, "1.3.6.1.4.1.24681.1.2.15.1.3"),                   // SystemFanSpeed table
   ])
   if (model == null && cpuTemp == null && !cpuLoads.length) {
     return { name: t.name, ip: t.ip, kind: "qnap", reachable: false }
@@ -254,19 +262,33 @@ async function collectQnap(t: SnmpTarget): Promise<any> {
   const cores = cpuLoads.map(Number).filter((n) => !isNaN(n))
   const cpuPct = cores.length ? Math.round(cores.reduce((a, b) => a + b, 0) / cores.length) : undefined
 
-  // Disks — iterate 1..hdNumber (bounded).
+  // RAM used %.  Values look like "16013.4 MB".
+  const memTotalMB = parseNum(memTotal), memFreeMB = parseNum(memFree)
+  const memPct = memTotalMB && memTotalMB > 0 && memFreeMB != null
+    ? Math.round(((memTotalMB - memFreeMB) / memTotalMB) * 100) : undefined
+
+  // Fans — each entry looks like "1835 RPM".
+  const fans = fanSpeeds.map((f) => parseNum(f)).filter((n): n is number => n != null && n > 0)
+
+  // Disks — iterate 1..hdNumber (bounded). Presence is judged by MODEL/CAPACITY:
+  // an empty bay reports model "--", but a FAILING disk can report an unreadable
+  // temp ("-- C/-- F") + negative status yet still advertise a real model. The old
+  // temp+status heuristic silently skipped those bad disks (e.g. an HDD in SMART
+  // "Warning" with status -9) — so the NAS looked healthy while QTS flagged it.
   const hdN = Math.min(Number(hdNumRaw) || 0, 24)
   const disks: any[] = []
   for (let i = 1; i <= hdN; i++) {
-    const [st, tp, sm, ds] = await Promise.all([
-      snmpGet(t, QNAP.hdStatus + i), snmpGet(t, QNAP.hdTemp + i), snmpGet(t, QNAP.hdSmart + i), snmpGet(t, QNAP.hdDescr + i),
+    const [st, tp, sm, ds, md, cap] = await Promise.all([
+      snmpGet(t, QNAP.hdStatus + i), snmpGet(t, QNAP.hdTemp + i), snmpGet(t, QNAP.hdSmart + i),
+      snmpGet(t, QNAP.hdDescr + i), snmpGet(t, QNAP.hdModel + i), snmpGet(t, QNAP.hdCapacity + i),
     ])
+    const model = md && md !== "--" ? md : undefined
+    const capacity = cap && cap !== "--" ? cap : undefined
+    // Only a truly empty bay (no model AND no capacity) is skipped.
+    if (!model && !capacity) continue
     const status = st != null ? Number(st) : undefined
     const tempC = parseC(tp)
-    // Empty bay: no readable temp and a non-ready (negative/absent, e.g. -5)
-    // status. Skip it — an empty slot isn't a failed disk.
-    if (tempC == null && (status == null || status < 0)) continue
-    disks.push({ slot: i, descr: ds || undefined, tempC, status, smart: sm && sm !== "--" ? sm : undefined })
+    disks.push({ slot: i, descr: ds || undefined, model, capacity, tempC, status, smart: sm && sm !== "--" ? sm : undefined })
   }
   // A present disk is bad only on a real error status, an explicitly-bad SMART
   // verdict, or overheating — not a blank "--" or an empty bay.
@@ -290,7 +312,10 @@ async function collectQnap(t: SnmpTarget): Promise<any> {
     name: t.name, ip: t.ip, kind: "qnap", reachable: true,
     model: model || undefined,
     cpuPct, cpuTempC: parseC(cpuTemp), sysTempC: parseC(sysTemp),
-    disks, badDisks: badDisks.map((d) => ({ slot: d.slot, status: d.status, smart: d.smart, tempC: d.tempC })),
+    memPct, memTotalMB: memTotalMB || undefined,
+    fans, fanRpm: fans.length ? Math.min(...fans) : undefined,
+    disks, diskCount: disks.length,
+    badDisks: badDisks.map((d) => ({ slot: d.slot, descr: d.descr, model: d.model, status: d.status, smart: d.smart, tempC: d.tempC })),
     volumes, fullVolumes: fullVols,
     tempWarnC: tempWarn, volumeWarnPct: volWarn,
   }
