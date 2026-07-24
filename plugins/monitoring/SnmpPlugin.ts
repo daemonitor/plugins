@@ -243,19 +243,20 @@ async function snmpWalkIndexed(t: SnmpTarget, oid: string, timeout = 10000): Pro
 async function collectQnap(t: SnmpTarget): Promise<any> {
   const tempWarn = t.tempWarnC ?? 70
   const volWarn = t.volumeWarnPct ?? 90
-  const [model, cpuTemp, sysTemp, cpuLoads, storDescrs, memTotal, memFree, fanSpeeds] = await Promise.all([
-    snmpGet(t, QNAP.model),
-    snmpGet(t, QNAP.cpuTemp),
-    snmpGet(t, QNAP.sysTemp),
-    snmpWalk(t, "1.3.6.1.2.1.25.3.3.1.2"), // hrProcessorLoad (per core)
-    snmpWalkIndexed(t, "1.3.6.1.2.1.25.2.3.1.3"),                  // hrStorageDescr
-    snmpGet(t, QNAP.memTotal),
-    snmpGet(t, QNAP.memFree),
-    snmpWalk(t, "1.3.6.1.4.1.24681.1.2.15.1.3"),                   // SystemFanSpeed table
+  // The light scalar gets can run together, but the WALKS must be SERIALIZED:
+  // QNAP's SNMP agent silently drops rows (and whole tables) under concurrent
+  // sessions, producing partial reads that flip a failing NAS back to a false
+  // "healthy". 5-min cadence — sequential latency is fine.
+  const [model, cpuTemp, sysTemp, memTotal, memFree] = await Promise.all([
+    snmpGet(t, QNAP.model), snmpGet(t, QNAP.cpuTemp), snmpGet(t, QNAP.sysTemp),
+    snmpGet(t, QNAP.memTotal), snmpGet(t, QNAP.memFree),
   ])
-  if (model == null && cpuTemp == null && !cpuLoads.length) {
+  if (model == null && cpuTemp == null) {
     return { name: t.name, ip: t.ip, kind: "qnap", reachable: false }
   }
+  const cpuLoads = await snmpWalk(t, "1.3.6.1.2.1.25.3.3.1.2")            // hrProcessorLoad (per core)
+  const storDescrs = await snmpWalkIndexed(t, "1.3.6.1.2.1.25.2.3.1.3")  // hrStorageDescr
+  const fanSpeeds = await snmpWalk(t, "1.3.6.1.4.1.24681.1.2.15.1.3")    // SystemFanSpeed table
 
   // CPU: average per-core load.
   const cores = cpuLoads.map(Number).filter((n) => !isNaN(n))
@@ -276,10 +277,14 @@ async function collectQnap(t: SnmpTarget): Promise<any> {
   // Presence keys on MODEL/CAPACITY ("--" = empty bay), so a FAILING disk
   // (unreadable temp, negative status) is still reported, not mistaken for empty.
   const DT = "1.3.6.1.4.1.24681.1.2.11.1." // disk table columns: 2=descr 3=temp 4=status 5=model 6=capacity 7=smart
-  const [wStatus, wTemp, wSmart, wDescr, wModel, wCap] = await Promise.all([
-    snmpWalkIndexed(t, DT + "4"), snmpWalkIndexed(t, DT + "3"), snmpWalkIndexed(t, DT + "7"),
-    snmpWalkIndexed(t, DT + "2"), snmpWalkIndexed(t, DT + "5"), snmpWalkIndexed(t, DT + "6"),
-  ])
+  // Serialized (not Promise.all) — concurrent column walks are what make the
+  // agent drop rows.
+  const wStatus = await snmpWalkIndexed(t, DT + "4")
+  const wTemp = await snmpWalkIndexed(t, DT + "3")
+  const wSmart = await snmpWalkIndexed(t, DT + "7")
+  const wDescr = await snmpWalkIndexed(t, DT + "2")
+  const wModel = await snmpWalkIndexed(t, DT + "5")
+  const wCap = await snmpWalkIndexed(t, DT + "6")
   const col = (rows: { idx: string; val: string }[]): Record<string, string> => {
     const m: Record<string, string> = {}
     for (const r of rows) m[r.idx] = r.val
@@ -298,6 +303,13 @@ async function collectQnap(t: SnmpTarget): Promise<any> {
     const tempC = parseC(cTp[i] || null)
     disks.push({ slot: Number(i), descr: cDs[i] || undefined, model, capacity, tempC, status, smart: cSm[i] && cSm[i] !== "--" ? cSm[i] : undefined })
   }
+  // A reachable QNAP always has ≥1 disk. Zero means the disk-table walks came
+  // back empty (agent timed out) — treat as an INCOMPLETE read, not a clean
+  // bill of health, so a real disk error isn't falsely cleared to green.
+  if (!disks.length) {
+    return { name: t.name, ip: t.ip, kind: "qnap", reachable: true, error: "SNMP read incomplete — disk table empty" }
+  }
+
   // A present disk is bad only on a real error status, an explicitly-bad SMART
   // verdict, or overheating — not a blank "--" or an empty bay.
   const badDisks = disks.filter((d) =>
