@@ -25,6 +25,11 @@ interface Container {
   // consecutive failures. Only collected for containers that are unhealthy.
   healthOutput?: string
   healthFailingStreak?: number
+  // Exit code of the last healthcheck. Docker records -1 when it KILLED the
+  // check for exceeding its timeout, which is a completely different fault from
+  // the command running and returning non-zero — and it is the case that
+  // produces no output at all, so without this there is nothing to report.
+  healthExitCode?: number
   netIn?: number       // bytes/sec (rx), rate across polls
   netOut?: number      // bytes/sec (tx)
   blkRead?: number     // bytes/sec (block read)
@@ -173,6 +178,7 @@ async function collectContainers(bin: string): Promise<Container[]> {
       if (!h) continue
       c.healthFailingStreak = Number(h.FailingStreak) || 0
       const last = Array.isArray(h.Log) && h.Log.length ? h.Log[h.Log.length - 1] : null
+      if (last && typeof last.ExitCode === "number") c.healthExitCode = last.ExitCode
       if (last?.Output) {
         // Healthcheck output is often multi-line and ends in a newline; collapse
         // it so it fits an alert line, and keep the head where the error is.
