@@ -101,6 +101,25 @@ function availableMem(): number {
             // fall through to freemem()
         }
     }
+    if (platform() === "darwin") {
+        // macOS keeps `freemem()` near zero by design (RAM held as cache/compressed).
+        // Reclaimable memory ≈ free + inactive + speculative + purgeable pages —
+        // this tracks the kernel's own "available" (memory_pressure free %), so a
+        // healthy Mac doesn't read as 100% used.
+        try {
+            const out = execSync("vm_stat", { encoding: "utf8", timeout: 4000 })
+            const page = parseInt(out.match(/page size of (\d+) bytes/)?.[1] || "16384", 10)
+            const pages = (re: RegExp) => parseInt(out.match(re)?.[1] || "0", 10)
+            const free = pages(/Pages free:\s+(\d+)/)
+            const inactive = pages(/Pages inactive:\s+(\d+)/)
+            const speculative = pages(/Pages speculative:\s+(\d+)/)
+            const purgeable = pages(/Pages purgeable:\s+(\d+)/)
+            const avail = (free + inactive + speculative + purgeable) * page
+            if (avail > 0) return avail
+        } catch {
+            // fall through to freemem()
+        }
+    }
     return freemem()
 }
 
@@ -109,23 +128,48 @@ function availableMem(): number {
 // so the figure reflects actual host network traffic, not container-to-host
 // chatter. Returns null off Linux (rate is then omitted, not faked).
 function readNetTotals(): { rx: number; tx: number } | null {
-    if (platform() !== "linux") return null
-    try {
-        const data = readFileSync("/proc/net/dev", "utf8")
-        let rx = 0, tx = 0
-        for (const line of data.split("\n")) {
-            const m = line.match(/^\s*([^:]+):\s*(.*)$/)
-            if (!m) continue
-            const iface = m[1].trim()
-            if (iface === "lo" || /^(veth|docker|br-|lxcbr|virbr|tap|tun)/.test(iface)) continue
-            const cols = m[2].trim().split(/\s+/).map(Number)
-            rx += cols[0] || 0   // column 1 = rx bytes
-            tx += cols[8] || 0   // column 9 = tx bytes
+    if (platform() === "linux") {
+        try {
+            const data = readFileSync("/proc/net/dev", "utf8")
+            let rx = 0, tx = 0
+            for (const line of data.split("\n")) {
+                const m = line.match(/^\s*([^:]+):\s*(.*)$/)
+                if (!m) continue
+                const iface = m[1].trim()
+                if (iface === "lo" || /^(veth|docker|br-|lxcbr|virbr|tap|tun)/.test(iface)) continue
+                const cols = m[2].trim().split(/\s+/).map(Number)
+                rx += cols[0] || 0   // column 1 = rx bytes
+                tx += cols[8] || 0   // column 9 = tx bytes
+            }
+            return { rx, tx }
+        } catch {
+            return null
         }
-        return { rx, tx }
-    } catch {
-        return null
     }
+    if (platform() === "darwin") {
+        // `netstat -ibn`: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll.
+        // Per-interface byte counters repeat across a NIC's address rows, so take one
+        // row per interface; skip loopback and virtual (bridge/utun/awdl/llw/gif/stf/ap).
+        try {
+            const out = execSync("netstat -ibn", { encoding: "utf8", timeout: 4000 })
+            let rx = 0, tx = 0
+            const seen = new Set<string>()
+            for (const line of out.split("\n").slice(1)) {
+                const c = line.trim().split(/\s+/)
+                if (c.length < 10) continue
+                const name = c[0]
+                if (!name || name === "lo0" || /^(bridge|utun|llw|awdl|gif|stf|ap\d|anpi|en\d*_)/.test(name)) continue
+                if (seen.has(name)) continue
+                seen.add(name)
+                rx += Number(c[6]) || 0   // Ibytes
+                tx += Number(c[9]) || 0   // Obytes
+            }
+            return { rx, tx }
+        } catch {
+            return null
+        }
+    }
+    return null
 }
 
 // Host OS metrics: cpu (from cpus().times), memory, disk, load, uptime,

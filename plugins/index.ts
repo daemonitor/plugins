@@ -8,6 +8,8 @@ import { createWordpressPlugin } from "./monitoring/WordpressPlugin"
 import { createLogWatchPlugin } from "./monitoring/LogWatchPlugin"
 import { createNetScanPlugin } from "./monitoring/NetScanPlugin"
 import { createSnmpPlugin } from "./monitoring/SnmpPlugin"
+import { createThreeCXPlugin } from "./monitoring/ThreeCXPlugin"
+import { createTplinkPlugin } from "./monitoring/TplinkPlugin"
 
 // In future, implement other plugin factory functions using the same pattern
 // import { createOSPlugin } from "./monitoring/OSPlugin"
@@ -29,6 +31,8 @@ export default {
     Logwatch: createLogWatchPlugin,
     Netscan: createNetScanPlugin,
     Snmp: createSnmpPlugin,
+    ThreeCX: createThreeCXPlugin,
+    Tplink: createTplinkPlugin,
     // CloudflarePlugin: createCloudflarePlugin,
     // EwelinkPlugin: createEwelinkPlugin,
     // MongoDBPlugin: createMongoDBPlugin,

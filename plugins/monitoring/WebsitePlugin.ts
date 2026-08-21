@@ -36,6 +36,10 @@ interface Endpoint {
     expectedStatusCode?: number
     timeout?: number
     origin?: OriginCheck
+    // Origin-only: the public URL can't be checked (e.g. a Cloudflare bot
+    // challenge 403s the checker), so the direct `origin` check IS the health
+    // signal. The public tier is skipped entirely — no false "down" from the WAF.
+    originOnly?: boolean
 }
 
 interface RawResult {
@@ -144,6 +148,27 @@ export function createWebsitePlugin() {
         const start = Date.now()
         const label = ep.name || ep.url
         const uid = `web-${(ep.name || ep.url).replace(/[^a-zA-Z0-9_.-]+/g, "-")}`
+
+        // Origin-only monitor: skip the public tier (unreachable behind a CDN bot
+        // challenge) and report the direct origin check as the endpoint's health.
+        if (ep.originOnly && ep.origin?.url) {
+            const o = await checkOrigin(ep)
+            await plugin.send({
+                name: label,
+                url: ep.url || o.url,
+                status: o.status,
+                duration: o.duration,
+                ok: o.ok,
+                originOnly: true,
+                hasAllExpectedStrings: o.hasAllExpectedStrings,
+                hasAnyUnexpectedStrings: o.hasAnyUnexpectedStrings,
+                missingExpected: o.missingExpected,
+                matchedUnexpected: o.matchedUnexpected,
+                error: o.error,
+            }, uid)
+            return
+        }
+
         let publicResult: any
         try {
             const ctrl = new AbortController()

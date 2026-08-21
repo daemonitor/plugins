@@ -21,9 +21,27 @@ interface Container {
   memPercent: number
   restarts: number
   exitCode: number
+  // Why the healthcheck is failing: its own last output, and how many
+  // consecutive failures. Only collected for containers that are unhealthy.
+  healthOutput?: string
+  healthFailingStreak?: number
+  netIn?: number       // bytes/sec (rx), rate across polls
+  netOut?: number      // bytes/sec (tx)
+  blkRead?: number     // bytes/sec (block read)
+  blkWrite?: number    // bytes/sec (block write)
 }
 
 const HEALTH_RE = /\((healthy|unhealthy|health: starting|starting)\)/i
+
+// Previous cumulative NetIO/BlockIO totals per container id, to derive a
+// per-second rate across polls. Module-level (one collect per host per cycle).
+const ioPrev: Record<string, { rx: number; tx: number; rd: number; wr: number; ts: number }> = {}
+
+// docker stats renders "12MB / 7.02MB" (rx / tx, or read / write). Split + convert.
+function pairToBytes(value: string): { a: number; b: number } {
+  const [x, y] = (value || "").split("/").map((p) => p.trim())
+  return { a: memToBytes(x), b: memToBytes(y) }
+}
 
 /** Convert docker's "83.86MiB" / "1.952GiB" memory strings to bytes. */
 function memToBytes(value: string): number {
@@ -73,15 +91,19 @@ async function collectContainers(bin: string): Promise<Container[]> {
 
   if (!containers.length) return containers
 
-  // 2. live stats for running containers (one batched call, best-effort)
+  // 2. live stats for running containers (one batched call, best-effort).
+  // NetIO/BlockIO are CUMULATIVE since container start, so we derive a per-second
+  // rate from the delta vs the previous poll (first poll → no rate).
   try {
     const { stdout: statsOut } = await execAsync(
-      `${bin} stats --no-stream --format '{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}'`,
+      `${bin} stats --no-stream --format '{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}'`,
       EXEC_OPTS,
     )
+    const now = Date.now()
+    const seen = new Set<string>()
     for (const line of statsOut.split("\n")) {
       if (!line.trim()) continue
-      const [id, cpuPerc, memUsage, memPerc] = line.split("|")
+      const [id, cpuPerc, memUsage, memPerc, netIO, blkIO] = line.split("|")
       const c = byId.get(id)
       if (!c) continue
       c.cpu = parseFloat((cpuPerc || "").replace("%", "")) || 0
@@ -89,7 +111,23 @@ async function collectContainers(bin: string): Promise<Container[]> {
       c.mem = memToBytes(used)
       c.memLimit = memToBytes(limit)
       c.memPercent = parseFloat((memPerc || "").replace("%", "")) || 0
+
+      const net = pairToBytes(netIO)   // { a: rx, b: tx }
+      const blk = pairToBytes(blkIO)   // { a: read, b: write }
+      seen.add(id)
+      const prev = ioPrev[id]
+      if (prev && now > prev.ts) {
+        const dt = (now - prev.ts) / 1000
+        // Guard counter resets (container restart): negative delta → skip that field.
+        if (net.a >= prev.rx) c.netIn = Math.round((net.a - prev.rx) / dt)
+        if (net.b >= prev.tx) c.netOut = Math.round((net.b - prev.tx) / dt)
+        if (blk.a >= prev.rd) c.blkRead = Math.round((blk.a - prev.rd) / dt)
+        if (blk.b >= prev.wr) c.blkWrite = Math.round((blk.b - prev.wr) / dt)
+      }
+      ioPrev[id] = { rx: net.a, tx: net.b, rd: blk.a, wr: blk.b, ts: now }
     }
+    // Drop prev samples for containers no longer present.
+    for (const k of Object.keys(ioPrev)) if (!seen.has(k)) delete ioPrev[k]
   } catch (err) {
     console.error("docker: stats collection failed:", (err as Error).message)
   }
@@ -113,6 +151,37 @@ async function collectContainers(bin: string): Promise<Container[]> {
     }
   } catch (err) {
     console.error("docker: inspect collection failed:", (err as Error).message)
+  }
+
+  // 4. For UNHEALTHY containers only, read the healthcheck's own last output.
+  //
+  // "1/13 containers unhealthy" says a problem exists and nothing about what it
+  // is. Docker already stores the failing command's output in
+  // .State.Health.Log[] — that is the actual error text, and without it an alert
+  // sends someone to ssh into the box to run the same healthcheck by hand.
+  //
+  // Read one container at a time and only for the unhealthy ones. The batched
+  // inspect above avoids .State.Health because the template errors for
+  // containers that have no healthcheck; a container reporting "(unhealthy)"
+  // necessarily has one, so this is safe, and it is a handful of calls at most
+  // precisely when something is wrong.
+  const unhealthy = containers.filter((c) => c.health === "unhealthy").slice(0, 5)
+  for (const c of unhealthy) {
+    try {
+      const { stdout } = await execAsync(`${bin} inspect --format '{{json .State.Health}}' ${c.id}`, EXEC_OPTS)
+      const h = JSON.parse(stdout.trim() || "null")
+      if (!h) continue
+      c.healthFailingStreak = Number(h.FailingStreak) || 0
+      const last = Array.isArray(h.Log) && h.Log.length ? h.Log[h.Log.length - 1] : null
+      if (last?.Output) {
+        // Healthcheck output is often multi-line and ends in a newline; collapse
+        // it so it fits an alert line, and keep the head where the error is.
+        c.healthOutput = String(last.Output).replace(/\s+/g, " ").trim().slice(0, 300)
+      }
+    } catch (err) {
+      // Best-effort: an alert naming the container is still better than none.
+      console.error(`docker: health log read failed for ${c.name}:`, (err as Error).message)
+    }
   }
 
   return containers

@@ -22,6 +22,10 @@ interface SnmpTarget {
   tonerWarnPct?: number // supply level at/under this = warning (default 10)
   volumeWarnPct?: number // volume fullness at/over this = warning (default 90)
   tempWarnC?: number // cpu/disk temp at/over this = warning (default 70)
+  // Name of the uplink interface (e.g. "eth0"). Summing all interfaces
+  // double-counts transit traffic and vendor pseudo-interfaces, so the NET
+  // headline comes from this link alone when set.
+  wanInterface?: string
 }
 
 interface SnmpConfig {
@@ -50,7 +54,29 @@ const SYS = {
   name: "1.3.6.1.2.1.1.5.0",    // sysName
   ifOper: "1.3.6.1.2.1.2.2.1.8", // ifOperStatus (walk): 1=up 2=down
   ifAdmin: "1.3.6.1.2.1.2.2.1.7", // ifAdminStatus (walk): 1=up (enabled)
+  ifName: "1.3.6.1.2.1.31.1.1.1.1",  // ifName (walk) — eth0/eth1/itf0/...
+  ifHCIn: "1.3.6.1.2.1.31.1.1.1.6",  // ifHCInOctets (walk, Counter64)
+  ifHCOut: "1.3.6.1.2.1.31.1.1.1.10", // ifHCOutOctets (walk, Counter64)
 }
+
+// UCD-SNMP-MIB + HOST-RESOURCES — CPU/RAM/load on net-snmp devices (EdgeOS
+// routers, Linux hosts). All best-effort: absent on gear that doesn't ship the
+// UCD MIB (many switches), so every read is null-tolerant.
+const UCD = {
+  cpuIdle: "1.3.6.1.4.1.2021.11.11.0",  // ssCpuIdle (%) → cpu% = 100 - idle
+  load1: "1.3.6.1.4.1.2021.10.1.3.1",   // laLoad 1-min
+  load5: "1.3.6.1.4.1.2021.10.1.3.2",
+  load15: "1.3.6.1.4.1.2021.10.1.3.3",
+  memTotal: "1.3.6.1.4.1.2021.4.5.0",   // memTotalReal (KB)
+  memAvail: "1.3.6.1.4.1.2021.4.6.0",   // memAvailReal (KB, free excl. cache)
+  memBuffer: "1.3.6.1.4.1.2021.4.14.0", // memBuffer (KB)
+  memCached: "1.3.6.1.4.1.2021.4.15.0", // memCached (KB)
+  hrProcLoad: "1.3.6.1.2.1.25.3.3.1.2", // hrProcessorLoad (walk, per-core %) — CPU fallback
+}
+
+// Previous cumulative octet counters PER INTERFACE (target ip -> ifIndex), for
+// per-link throughput rates across polls.
+const netPrevIf: Record<string, Record<string, { in: number; out: number; ts: number }>> = {}
 
 // QNAP enterprise MIB (NAS-MIB, 1.3.6.1.4.1.24681.1.2). A full walk of this
 // subtree times out on QTS, so everything here is fetched by exact OID.
@@ -101,7 +127,7 @@ async function snmpGet(t: SnmpTarget, oid: string, timeout = 8000): Promise<stri
   try {
     const { stdout } = await pexec(
       "snmpget",
-      ["-v", t.version || "2c", "-c", t.community || "public", "-Ovq", "-t", "2", "-r", "1", t.ip, oid],
+      ["-v", t.version || "2c", "-c", t.community || "public", "-Oevq", "-t", "2", "-r", "1", t.ip, oid],
       { timeout },
     )
     const raw = stdout.trim().replace(/^"|"$/g, "")
@@ -116,7 +142,7 @@ async function snmpWalk(t: SnmpTarget, oid: string, timeout = 10000): Promise<st
   try {
     const { stdout } = await pexec(
       "snmpwalk",
-      ["-v", t.version || "2c", "-c", t.community || "public", "-Oqv", "-t", "2", "-r", "1", t.ip, oid],
+      ["-v", t.version || "2c", "-c", t.community || "public", "-Oeqv", "-t", "2", "-r", "1", t.ip, oid],
       { timeout },
     )
     return stdout.split("\n").map((l) => decodeSnmp(l.trim().replace(/^"|"$/g, ""))).filter(Boolean)
@@ -184,24 +210,126 @@ async function collectDevice(t: SnmpTarget): Promise<any> {
     snmpGet(t, SYS.descr),
     snmpGet(t, SYS.name),
     snmpGet(t, SYS.uptime),
-    snmpWalk(t, SYS.ifOper),
-    snmpWalk(t, SYS.ifAdmin),
+    snmpWalkIndexed(t, SYS.ifOper),
+    snmpWalkIndexed(t, SYS.ifAdmin),
   ])
   if (descr == null && name == null && !oper.length) {
     return { name: t.name, ip: t.ip, kind: t.kind || "device", reachable: false }
   }
+  // Index the link-state walks by ifIndex so each interface can carry its own
+  // up/down (positional zipping breaks whenever the two walks differ in length).
+  const byIndex = (rows: { idx: string; val: string }[]): Record<string, string> => {
+    const m: Record<string, string> = {}
+    for (const r of rows) m[r.idx] = r.val
+    return m
+  }
+  const operByIdx = byIndex(oper)
+  const adminByIdx = byIndex(admin)
+  // Values arrive numeric (-Oe), but tolerate an enum rendering like "up(1)"
+  // from any agent/MIB combination that slips one through.
+  const enumNum = (v?: string): number | undefined => {
+    if (v == null) return undefined
+    const m = /\((\d+)\)\s*$/.exec(v) || /^\s*(-?\d+)\s*$/.exec(v)
+    return m ? Number(m[1]) : undefined
+  }
+
   // Only count ADMIN-enabled ports; an enabled port that's operationally down is
   // a real link-down (ignore the many disabled ports on a big switch).
   let portsTotal = 0
   let portsUp = 0
-  for (let i = 0; i < oper.length; i++) {
-    if (Number(admin[i]) === 1) {
+  for (const idx of Object.keys(adminByIdx)) {
+    if (enumNum(adminByIdx[idx]) === 1) {
       portsTotal++
-      if (Number(oper[i]) === 1) portsUp++
+      if (enumNum(operByIdx[idx]) === 1) portsUp++
     }
   }
   // sysUpTime timeticks → seconds
   const upSecs = uptimeRaw != null ? Math.round((Number(String(uptimeRaw).replace(/[^0-9]/g, "")) || 0) / 100) : undefined
+
+  // CPU / RAM / load / network — best-effort UCD-SNMP + IF-MIB counters. Absent
+  // on gear without the UCD MIB (returns "No Such Object" fast → null), so every
+  // field is optional and simply omitted when unsupported.
+  const [cpuIdle, load1, load5, load15, memTotal, memAvail, memBuffer, memCached, procLoads, ifNames, hcInIdx, hcOutIdx] =
+    await Promise.all([
+      snmpGet(t, UCD.cpuIdle), snmpGet(t, UCD.load1), snmpGet(t, UCD.load5), snmpGet(t, UCD.load15),
+      snmpGet(t, UCD.memTotal), snmpGet(t, UCD.memAvail), snmpGet(t, UCD.memBuffer), snmpGet(t, UCD.memCached),
+      snmpWalk(t, UCD.hrProcLoad), snmpWalkIndexed(t, SYS.ifName),
+      snmpWalkIndexed(t, SYS.ifHCIn), snmpWalkIndexed(t, SYS.ifHCOut),
+    ])
+
+  // CPU %: prefer ssCpuIdle (100 - idle); fall back to avg per-core hrProcessorLoad.
+  let cpuPct: number | undefined
+  if (cpuIdle != null && !isNaN(Number(cpuIdle))) {
+    cpuPct = Math.max(0, Math.min(100, 100 - Math.round(Number(cpuIdle))))
+  } else {
+    const cores = procLoads.map(Number).filter((n) => !isNaN(n))
+    if (cores.length) cpuPct = Math.round(cores.reduce((a, b) => a + b, 0) / cores.length)
+  }
+
+  const load1n = parseNum(load1)
+  const loadavg = [parseNum(load1), parseNum(load5), parseNum(load15)].filter((n): n is number => n != null)
+
+  // RAM used %: (total - free - buffers - cache) / total. memAvailReal excludes
+  // cache already on some agents; subtracting buffer+cache is safe (they default 0).
+  let memPct: number | undefined, memTotalMB: number | undefined
+  const mTot = parseNum(memTotal), mAvail = parseNum(memAvail)
+  const mBuf = parseNum(memBuffer) || 0, mCache = parseNum(memCached) || 0
+  if (mTot && mTot > 0 && mAvail != null) {
+    const usedKb = Math.max(0, mTot - mAvail - mBuf - mCache)
+    memPct = Math.round((usedKb / mTot) * 100)
+    memTotalMB = Math.round(mTot / 1024)
+  }
+
+  // Network throughput, PER INTERFACE (bytes/sec).
+  //
+  // Summing every interface is meaningless on a router: a transiting packet is
+  // counted once arriving on the WAN and again leaving on the LAN, so
+  // sum(in) === sum(out) by construction — and vendors add aggregate pseudo
+  // interfaces (EdgeOS `itf0`) that mirror the whole load a second time. The
+  // observed effect was ~5x inflation with in/out identical to the eye.
+  //
+  // So: rate each interface separately, skip loopback/pseudo, and let the target
+  // name its WAN (`wanInterface`) to headline the figure that actually means
+  // "internet traffic". Without one, the headline is left undefined rather than
+  // reporting a number we know to be wrong.
+  const PSEUDO = /^(lo|imq\d*|itf\d*|ifb\d*|sit\d*|gre\d*|teql\d*|tunl\d*)$/i
+  const nameByIdx = byIndex(ifNames)
+  const inByIdx = byIndex(hcInIdx)
+  const outByIdx = byIndex(hcOutIdx)
+
+  const now = Date.now()
+  const prevIf = netPrevIf[t.ip] || {}
+  const nextIf: Record<string, { in: number; out: number; ts: number }> = {}
+  const interfaces: { name: string; inBps?: number; outBps?: number; up?: boolean; adminUp?: boolean }[] = []
+  for (const idx of Object.keys(inByIdx)) {
+    const name = (nameByIdx[idx] || `if${idx}`).replace(/^"|"$/g, "")
+    const cin = Number(inByIdx[idx]), cout = Number(outByIdx[idx])
+    if (isNaN(cin) || isNaN(cout)) continue
+    nextIf[idx] = { in: cin, out: cout, ts: now }
+    if (PSEUDO.test(name)) continue
+    const p = prevIf[idx]
+    let inBps: number | undefined, outBps: number | undefined
+    if (p && cin >= p.in && cout >= p.out && now > p.ts) {
+      const dt = (now - p.ts) / 1000
+      if (dt > 0) {
+        inBps = Math.round((cin - p.in) / dt)
+        outBps = Math.round((cout - p.out) / dt)
+      }
+    }
+    // ifOperStatus 1=up, ifAdminStatus 1=enabled. A link that's admin-enabled but
+    // operationally down is a real fault; an admin-disabled port is just off.
+    const adminUp = adminByIdx[idx] != null ? enumNum(adminByIdx[idx]) === 1 : undefined
+    const linkUp = operByIdx[idx] != null ? enumNum(operByIdx[idx]) === 1 : undefined
+    interfaces.push({ name, inBps, outBps, up: linkUp, adminUp })
+  }
+  netPrevIf[t.ip] = nextIf
+
+  // Headline = the WAN link when the target names one.
+  const wanName = t.wanInterface
+  const wan = wanName ? interfaces.find((i) => i.name === wanName) : undefined
+  const netIn = wan?.inBps
+  const netOut = wan?.outBps
+
   return {
     name: t.name,
     ip: t.ip,
@@ -212,6 +340,19 @@ async function collectDevice(t: SnmpTarget): Promise<any> {
     uptimeSecs: upSecs,
     portsUp,
     portsTotal,
+    cpuPct,
+    cpuCores: procLoads.length || undefined, // for load-per-core normalization
+    load1: load1n,
+    loadavg: loadavg.length ? loadavg : undefined,
+    memPct,
+    memTotalMB,
+    netIn,
+    netOut,
+    wanInterface: wanName,
+    // Per-link rates (loopback/pseudo excluded), busiest first.
+    interfaces: interfaces
+      .slice()
+      .sort((a, b) => ((b.inBps || 0) + (b.outBps || 0)) - ((a.inBps || 0) + (a.outBps || 0))),
   }
 }
 
@@ -221,7 +362,7 @@ async function snmpWalkIndexed(t: SnmpTarget, oid: string, timeout = 10000): Pro
   try {
     const { stdout } = await pexec(
       "snmpwalk",
-      ["-v", t.version || "2c", "-c", t.community || "public", "-On", "-t", "2", "-r", "1", t.ip, oid],
+      ["-v", t.version || "2c", "-c", t.community || "public", "-Oen", "-t", "2", "-r", "1", t.ip, oid],
       { timeout },
     )
     return stdout.split("\n").map((l) => {
@@ -299,15 +440,39 @@ async function collectQnap(t: SnmpTarget): Promise<any> {
     const capacity = cCap[i] && cCap[i] !== "--" ? cCap[i] : undefined
     // Only a truly empty bay (no model AND no capacity) is skipped.
     if (!model && !capacity) continue
-    const status = cSt[i] != null ? Number(cSt[i]) : undefined
+    let status = cSt[i] != null ? Number(cSt[i]) : undefined
     const tempC = parseC(cTp[i] || null)
-    disks.push({ slot: Number(i), descr: cDs[i] || undefined, model, capacity, tempC, status, smart: cSm[i] && cSm[i] !== "--" ? cSm[i] : undefined })
+    let smart = cSm[i] && cSm[i] !== "--" ? cSm[i] : undefined
+    // A present disk MUST carry a health verdict (status or SMART). If the
+    // status/smart column walks came back empty for this row that cycle, the
+    // disk would look healthy purely for lack of a reading — the exact bug that
+    // flips a failing NAS green. Fall back to a targeted per-disk get before
+    // giving up on the row.
+    if (status == null) {
+      const s = await snmpGet(t, DT + "4." + i)
+      if (s != null && s !== "" && !isNaN(Number(s))) status = Number(s)
+    }
+    if (smart == null) {
+      const s = await snmpGet(t, DT + "7." + i)
+      if (s != null && s !== "" && s !== "--") smart = s
+    }
+    disks.push({ slot: Number(i), descr: cDs[i] || undefined, model, capacity, tempC, status, smart })
   }
   // A reachable QNAP always has ≥1 disk. Zero means the disk-table walks came
   // back empty (agent timed out) — treat as an INCOMPLETE read, not a clean
   // bill of health, so a real disk error isn't falsely cleared to green.
   if (!disks.length) {
     return { name: t.name, ip: t.ip, kind: "qnap", reachable: true, error: "SNMP read incomplete — disk table empty" }
+  }
+  // Every present disk must have a health verdict after the fallback gets. If
+  // any disk still lacks BOTH a status and a SMART reading, we cannot certify it
+  // — the read is incomplete, so report that rather than a false all-clear.
+  const unverified = disks.filter((d) => d.status == null && d.smart == null)
+  if (unverified.length) {
+    return {
+      name: t.name, ip: t.ip, kind: "qnap", reachable: true,
+      error: `SNMP read incomplete — no health verdict for ${unverified.length} disk(s): ${unverified.map((d) => d.descr || `slot ${d.slot}`).join(", ")}`,
+    }
   }
 
   // A present disk is bad only on a real error status, an explicitly-bad SMART
