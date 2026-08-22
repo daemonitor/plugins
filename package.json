@@ -53,5 +53,8 @@
   "bugs": {
     "url": "https://github.com/daemonitor/plugins/issues"
   },
-  "homepage": "https://github.com/daemonitor/plugins#readme"
+  "homepage": "https://github.com/daemonitor/plugins#readme",
+  "overrides": {
+    "js-yaml": "^4.3.1"
+  }
 }
