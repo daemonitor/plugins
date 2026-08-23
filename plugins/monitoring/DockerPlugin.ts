@@ -36,6 +36,39 @@ interface Container {
   blkWrite?: number    // bytes/sec (block write)
 }
 
+/**
+ * Reduce a healthcheck's captured output to the part that says what went wrong.
+ *
+ * Healthchecks are overwhelmingly `curl`, and curl writes its transfer meter to
+ * the same buffer as the response — so the raw text is mostly columns of rates
+ * and `--:--:--` padding, with the answer somewhere inside. Taking the first 300
+ * characters, as this used to, returns the meter header every single time.
+ *
+ * curl also rewrites the meter line in place with \r while the body streams in,
+ * so the response can land INSIDE a rate row rather than on its own line. That
+ * rules out dropping noisy lines wholesale; the meter tokens have to come out
+ * and whatever is left is the message.
+ */
+export function cleanHealthOutput(raw: string): string {
+  const s = String(raw || "")
+  // When curl itself failed it says so in one line, and that line is the entire
+  // answer: exit 7 is connection refused, 28 is timeout, 22 is an HTTP error.
+  const curlErr = s.match(/curl:\s*\(\d+\)[^\r\n]*/)
+  if (curlErr) return curlErr[0].trim().slice(0, 300)
+  const stripped = s
+    .replace(/%\s*Total[\s\S]*?Dload\s+Upload\s+Total\s+Spent\s+Left\s+Speed/g, " ")
+    .replace(/%\s*Total[^\r\n]*/g, " ")
+    .replace(/Dload[^\r\n]*Speed/g, " ")
+    .replace(/(?:--:--:--|\d+:\d{2}:\d{2})/g, " ")
+    .replace(/\s+/g, " ")
+    // what remains of the meter is runs of bare counters
+    .replace(/(?:\s\d+(?:\.\d+)?[kKMG]?){3,}(?=\s|$)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  // A failing command puts its error last, after whatever it managed to print.
+  return stripped.length > 300 ? "…" + stripped.slice(-300) : stripped
+}
+
 const HEALTH_RE = /\((healthy|unhealthy|health: starting|starting)\)/i
 
 // Previous cumulative NetIO/BlockIO totals per container id, to derive a
@@ -177,12 +210,17 @@ async function collectContainers(bin: string): Promise<Container[]> {
       const h = JSON.parse(stdout.trim() || "null")
       if (!h) continue
       c.healthFailingStreak = Number(h.FailingStreak) || 0
-      const last = Array.isArray(h.Log) && h.Log.length ? h.Log[h.Log.length - 1] : null
-      if (last && typeof last.ExitCode === "number") c.healthExitCode = last.ExitCode
-      if (last?.Output) {
-        // Healthcheck output is often multi-line and ends in a newline; collapse
-        // it so it fits an alert line, and keep the head where the error is.
-        c.healthOutput = String(last.Output).replace(/\s+/g, " ").trim().slice(0, 300)
+      const log: any[] = Array.isArray(h.Log) ? h.Log : []
+      // Docker keeps the last five probes, and the newest one can be a PASS while
+      // the container is still marked unhealthy — the status lags a recovery, and
+      // a flapping check alternates. Quoting that pass is how an alert ends up
+      // giving {"status":"ok"} as the reason something is broken. Report the most
+      // recent probe that actually failed.
+      const entry = [...log].reverse().find((e) => e && e.ExitCode !== 0) || log[log.length - 1] || null
+      if (entry && typeof entry.ExitCode === "number") c.healthExitCode = entry.ExitCode
+      if (entry?.Output) {
+        const cleaned = cleanHealthOutput(entry.Output)
+        if (cleaned) c.healthOutput = cleaned
       }
     } catch (err) {
       // Best-effort: an alert naming the container is still better than none.

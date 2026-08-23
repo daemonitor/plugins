@@ -1,6 +1,6 @@
 {
   "name": "@daemonitor/plugins",
-  "version": "1.1.24",
+  "version": "1.1.25",
   "description": "daemonitor plugins",
   "types": "types/index.d.ts",
   "main": "dist/index.js",
