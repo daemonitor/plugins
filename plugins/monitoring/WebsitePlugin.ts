@@ -1,5 +1,6 @@
 import * as http from "node:http"
 import * as https from "node:https"
+import * as net from "node:net"
 import { URL } from "node:url"
 import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
 
@@ -49,6 +50,11 @@ interface RawResult {
     error?: string
 }
 
+// URL keeps IPv6 hosts bracketed ("[::1]"); net.isIP wants them bare.
+function isIpLiteral(hostname: string): boolean {
+    return net.isIP(hostname.replace(/^\[|\]$/g, "")) !== 0
+}
+
 // Low-level GET that can hit one host (`target`) while presenting a different
 // Host header. fetch() can't do this — Host is a forbidden header per the
 // Fetch spec and is silently dropped — so this uses Node's http/https
@@ -80,7 +86,20 @@ function rawGet(target: string, opts: { host?: string; headers?: Record<string, 
                 // target. Without it, Node derives SNI from headers.Host,
                 // which would validate the cert against the WRONG hostname
                 // (the public one, not the origin actually being dialed).
-                ...(u.protocol === "https:" ? { servername: u.hostname, rejectUnauthorized: !opts.insecure } : {}),
+                //
+                // SNI must be a DNS name: RFC 6066 forbids IP literals, and
+                // Node/bun throw ERR_INVALID_ARG_VALUE rather than ignoring
+                // one, which kills the whole agent at startup. When the origin
+                // is dialed by IP there is no name to pin, so omit servername
+                // and let validation match the IP against the cert's IP SANs —
+                // which is the right check for an IP target, and is what the
+                // Host header override is deliberately kept out of.
+                ...(u.protocol === "https:"
+                    ? {
+                          ...(isIpLiteral(u.hostname) ? {} : { servername: u.hostname }),
+                          rejectUnauthorized: !opts.insecure,
+                      }
+                    : {}),
             },
             (res) => {
                 let body = ""
