@@ -1,5 +1,5 @@
 import crypto from "node:crypto"
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // TP-Link range extender / AP monitor (RE505X and siblings running TP-Link's
 // LuCI-derived firmware).

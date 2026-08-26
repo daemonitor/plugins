@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // SNMP monitor. First target class: printers (standard Printer-MIB) — model,
 // serial, lifetime page count, and per-supply toner/consumable levels. Shells

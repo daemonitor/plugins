@@ -1,5 +1,5 @@
-import { PluginBase } from "./BasePlugin"
-import pluginsFactory from "../plugins/index"
+import { PluginBase } from "./BasePlugin.js"
+import pluginsFactory from "../plugins/index.js"
 
 export const PluginLoader = {
     // Load all plugins using the factories

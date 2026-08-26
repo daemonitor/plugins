@@ -1,6 +1,6 @@
 import { stat, open } from "node:fs/promises"
 import * as path from "node:path"
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // Access-log watcher. Tails nginx/apache access logs on the WP host and applies
 // the log-class detection rules from the Archpaper handoff — the ones that are

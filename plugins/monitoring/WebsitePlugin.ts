@@ -2,7 +2,7 @@ import * as http from "node:http"
 import * as https from "node:https"
 import * as net from "node:net"
 import { URL } from "node:url"
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // A direct-to-origin check, for sites fronted by a CDN (Cloudflare) where the
 // public URL alone can't tell you the origin server is actually healthy — CF

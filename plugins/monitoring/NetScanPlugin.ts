@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // LAN device reachability monitor. Pings a configured list of devices (the
 // office infrastructure — switch, printers, APs, extenders, PBX, router, NAS,

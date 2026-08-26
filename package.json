@@ -27,7 +27,7 @@
   },
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@8.2.0",
+  "packageManager": "pnpm@9.15.9",
   "devDependencies": {
     "@types/node": "^26.1.1",
     "nuxt": "^3.15.4",
@@ -56,5 +56,8 @@
   "homepage": "https://github.com/daemonitor/plugins#readme",
   "overrides": {
     "js-yaml": "^4.3.1"
+  },
+  "engines": {
+    "node": ">=18.17"
   }
 }

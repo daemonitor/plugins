@@ -1,22 +1,22 @@
 // Import plugin factory functions
-import { createPM2Plugin } from "./monitoring/PM2Plugin"
-import { createDockerPlugin } from "./monitoring/DockerPlugin"
-import { createLxcPlugin } from "./monitoring/LxcPlugin"
-import { createOSPlugin } from "./monitoring/OSPlugin"
-import { createWebsitePlugin } from "./monitoring/WebsitePlugin"
-import { createWordpressPlugin } from "./monitoring/WordpressPlugin"
-import { createLogWatchPlugin } from "./monitoring/LogWatchPlugin"
-import { createNetScanPlugin } from "./monitoring/NetScanPlugin"
-import { createSnmpPlugin } from "./monitoring/SnmpPlugin"
-import { createThreeCXPlugin } from "./monitoring/ThreeCXPlugin"
-import { createTplinkPlugin } from "./monitoring/TplinkPlugin"
+import { createPM2Plugin } from "./monitoring/PM2Plugin.js"
+import { createDockerPlugin } from "./monitoring/DockerPlugin.js"
+import { createLxcPlugin } from "./monitoring/LxcPlugin.js"
+import { createOSPlugin } from "./monitoring/OSPlugin.js"
+import { createWebsitePlugin } from "./monitoring/WebsitePlugin.js"
+import { createWordpressPlugin } from "./monitoring/WordpressPlugin.js"
+import { createLogWatchPlugin } from "./monitoring/LogWatchPlugin.js"
+import { createNetScanPlugin } from "./monitoring/NetScanPlugin.js"
+import { createSnmpPlugin } from "./monitoring/SnmpPlugin.js"
+import { createThreeCXPlugin } from "./monitoring/ThreeCXPlugin.js"
+import { createTplinkPlugin } from "./monitoring/TplinkPlugin.js"
 
 // In future, implement other plugin factory functions using the same pattern
-// import { createOSPlugin } from "./monitoring/OSPlugin"
-// import { createMongoDBPlugin } from "./monitoring/MongoDBPlugin"
-// import { createWebsitePlugin } from "./monitoring/WebsitePlugin"
-// import { createCloudflarePlugin } from "./monitoring/CloudflarePlugin"
-// import { createEwelinkPlugin } from "./monitoring/EwelinkPlugin"
+// import { createOSPlugin } from "./monitoring/OSPlugin.js"
+// import { createMongoDBPlugin } from "./monitoring/MongoDBPlugin.js"
+// import { createWebsitePlugin } from "./monitoring/WebsitePlugin.js"
+// import { createCloudflarePlugin } from "./monitoring/CloudflarePlugin.js"
+// import { createEwelinkPlugin } from "./monitoring/EwelinkPlugin.js"
 
 // Export factory functions to create plugin instances.
 // (Keys are display-only; the manager activates a plugin when its getName()

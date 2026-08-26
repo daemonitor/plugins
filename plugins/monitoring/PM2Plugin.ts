@@ -1,4 +1,4 @@
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // Factory function to create PM2 plugin
 export function createPM2Plugin() {

@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { readdir } from "node:fs/promises"
 import * as path from "node:path"
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // WordPress security-posture plugin. Runs on the WP host (where the daemonitor
 // client already runs) and polls the state that the Archpaper intrusions moved

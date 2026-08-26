@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { connect } from "node:net"
 import { hostname } from "node:os"
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // 3CX PhoneSystem monitor. Runs ON a 3CX appliance (Debian) and watches the
 // signals that actually break a PBX, using only unprivileged, auth-free reads:

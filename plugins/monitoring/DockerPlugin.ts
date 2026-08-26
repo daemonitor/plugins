@@ -1,4 +1,4 @@
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 import { exec } from "child_process"
 import { promisify } from "util"
 import { hostname } from "os"

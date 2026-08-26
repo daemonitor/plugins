@@ -1,4 +1,4 @@
-import { PluginConfigProvider } from "./PluginConfigProvider"
+import { PluginConfigProvider } from "./PluginConfigProvider.js"
 
 export interface PluginBase {
   alias: string;

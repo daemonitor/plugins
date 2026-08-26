@@ -1,11 +1,11 @@
-import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin"
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 import {
     arch, cpus, freemem, hostname, loadavg, networkInterfaces,
     platform, release, totalmem, type, uptime,
 } from "os"
 import { readFileSync } from "fs"
 import { execSync } from "child_process"
-import { parseProcesses, PS_CMD, type ProcInfo } from "../../lib/processes"
+import { parseProcesses, PS_CMD, type ProcInfo } from "../../lib/processes.js"
 
 // Named service processes (nginx / php-fpm / db / …) running on the host.
 function collectProcesses(): ProcInfo[] {

@@ -1,7 +1,7 @@
-import { PluginLoader } from "./PluginLoader"
+import { PluginLoader } from "./PluginLoader.js"
 import { IConnector } from "@daemonitor/common"
-import { PluginBase } from "./BasePlugin"
-import { PluginConfigProvider } from "./PluginConfigProvider"
+import { PluginBase } from "./BasePlugin.js"
+import { PluginConfigProvider } from "./PluginConfigProvider.js"
 
 interface PluginManagerState {
   availablePlugins: PluginBase[];

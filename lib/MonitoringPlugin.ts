@@ -1,5 +1,5 @@
-import { PluginBase } from "./BasePlugin"
-import { PluginManager } from "./PluginManager"
+import { PluginBase } from "./BasePlugin.js"
+import { PluginManager } from "./PluginManager.js"
 
 // Define the monitoring plugin interface
 export type MonitoringPluginBase = PluginBase & {
