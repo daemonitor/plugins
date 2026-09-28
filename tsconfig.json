@@ -33,6 +33,7 @@
   "exclude": [
     "node_modules",
     "nuxt.config.ts",
+    "test",
     "plugins/monitoring/CloudflarePlugin.ts",
     "plugins/monitoring/EwelinkPlugin.ts",
     "plugins/monitoring/MongoDBPlugin.ts"

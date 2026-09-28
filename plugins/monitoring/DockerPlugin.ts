@@ -2,6 +2,7 @@ import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/Monitori
 import { exec } from "child_process"
 import { promisify } from "util"
 import { hostname } from "os"
+import { readFile } from "fs/promises"
 
 const execAsync = promisify(exec)
 const EXEC_OPTS = { maxBuffer: 32 * 1024 * 1024 } // containers.length can be large
@@ -73,7 +74,81 @@ const HEALTH_RE = /\((healthy|unhealthy|health: starting|starting)\)/i
 
 // Previous cumulative NetIO/BlockIO totals per container id, to derive a
 // per-second rate across polls. Module-level (one collect per host per cycle).
-const ioPrev: Record<string, { rx: number; tx: number; rd: number; wr: number; ts: number }> = {}
+// `src` records where each pair came from: a rate is only taken between two
+// readings from the same source, or a switch from docker's rounded "17.8GB" to
+// the exact counter would read as gigabytes moved in 30 seconds.
+type IoSrc = "exact" | "stats"
+interface IoPair { a: number; b: number; src: IoSrc }
+const ioPrev: Record<string, { net?: IoPair; blk?: IoPair; ts: number }> = {}
+
+/** Sum of rbytes/wbytes across every device in a cgroup v2 io.stat. */
+export function parseIoStat(text: string): { a: number; b: number } | null {
+  let a = 0, b = 0, seen = false
+  for (const line of text.split("\n")) {
+    const r = /\brbytes=(\d+)/.exec(line)
+    const w = /\bwbytes=(\d+)/.exec(line)
+    if (r || w) seen = true
+    if (r) a += Number(r[1])
+    if (w) b += Number(w[1])
+  }
+  return seen ? { a, b } : (text.trim() === "" ? { a: 0, b: 0 } : null)
+}
+
+/** rx/tx bytes summed over a /proc/<pid>/net/dev, loopback excluded. */
+export function parseNetDev(text: string): { a: number; b: number } | null {
+  let a = 0, b = 0, seen = false
+  for (const line of text.split("\n")) {
+    const m = /^\s*([^:\s]+):\s*(.*)$/.exec(line)
+    if (!m || m[1] === "lo") continue
+    const f = m[2].trim().split(/\s+/).map(Number)
+    // receive: bytes packets errs drop fifo frame compressed multicast | transmit: bytes …
+    if (f.length < 9 || !Number.isFinite(f[0]) || !Number.isFinite(f[8])) continue
+    a += f[0]
+    b += f[8]
+    seen = true
+  }
+  return seen ? { a, b } : null
+}
+
+/** The cgroup v2 path in a /proc/<pid>/cgroup ("0::/system.slice/docker-….scope"), or null on v1. */
+export function cgroupV2Path(text: string): string | null {
+  const m = /^0::(\/.*)$/m.exec(text)
+  return m ? m[1].trim() : null
+}
+
+/**
+ * Byte rate between two cumulative readings. Undefined when there is no usable
+ * previous reading: none yet, a different source, or the counter went backwards
+ * (container restarted, counters reset).
+ */
+export function ioRate(cur: number, prev: number | undefined, dt: number): number | undefined {
+  if (prev == null || dt <= 0 || cur < prev) return undefined
+  return Math.round((cur - prev) / dt)
+}
+
+/**
+ * Exact cumulative counters for one container, read from the kernel rather than
+ * `docker stats`, which prints three significant figures. At "17.8GB" one step
+ * is 100MB, so the delta between two 30s polls was almost always zero.
+ *
+ * Needs the host pid (from inspect). Works for docker and podman, systemd or
+ * cgroupfs driver, because the cgroup path comes from the process itself.
+ * Either half is null when it can't be read (cgroup v1, a hidepid /proc); the
+ * caller falls back to the stats strings for that half.
+ */
+async function readExactIo(pid: number, hostNet: boolean): Promise<{ net: { a: number; b: number } | null; blk: { a: number; b: number } | null }> {
+  if (!(pid > 0)) return { net: null, blk: null }
+  const read = (p: string) => readFile(p, "utf8").catch(() => null)
+  const [cg, dev] = await Promise.all([read(`/proc/${pid}/cgroup`), hostNet ? Promise.resolve(null) : read(`/proc/${pid}/net/dev`)])
+  const path = cg ? cgroupV2Path(cg) : null
+  const io = path ? await read(`/sys/fs/cgroup${path}/io.stat`) : null
+  return {
+    // Host networking shares the host's interfaces; reading them would charge
+    // all host traffic to this container. docker stats reports 0 for it, and so do we.
+    net: hostNet ? { a: 0, b: 0 } : (dev ? parseNetDev(dev) : null),
+    blk: io != null ? parseIoStat(io) : null,
+  }
+}
 
 // docker stats renders "12MB / 7.02MB" (rx / tx, or read / write). Split + convert.
 function pairToBytes(value: string): { a: number; b: number } {
@@ -100,7 +175,7 @@ function memToBytes(value: string): number {
  *   2. `docker stats`      — live CPU / memory for running containers (one batch)
  *   3. `docker inspect`    — restart count, health, exit code (one batch)
  */
-async function collectContainers(bin: string): Promise<Container[]> {
+export async function collectContainers(bin: string): Promise<Container[]> {
   const psFmt = '{{.ID}}|{{.Names}}|{{.Image}}|{{.State}}|{{.Status}}|{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}'
   const { stdout: psOut } = await execAsync(`${bin} ps -a --format '${psFmt}'`, EXEC_OPTS)
 
@@ -130,15 +205,15 @@ async function collectContainers(bin: string): Promise<Container[]> {
   if (!containers.length) return containers
 
   // 2. live stats for running containers (one batched call, best-effort).
-  // NetIO/BlockIO are CUMULATIVE since container start, so we derive a per-second
-  // rate from the delta vs the previous poll (first poll → no rate).
+  // NetIO/BlockIO are CUMULATIVE since container start; they are kept here only
+  // as the fallback for counters the kernel won't give us (see readExactIo), and
+  // the rate is derived after inspect, once the pid is known.
+  const statsIo = new Map<string, { net: { a: number; b: number }; blk: { a: number; b: number } }>()
   try {
     const { stdout: statsOut } = await execAsync(
       `${bin} stats --no-stream --format '{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}'`,
       EXEC_OPTS,
     )
-    const now = Date.now()
-    const seen = new Set<string>()
     for (const line of statsOut.split("\n")) {
       if (!line.trim()) continue
       const [id, cpuPerc, memUsage, memPerc, netIO, blkIO] = line.split("|")
@@ -150,22 +225,8 @@ async function collectContainers(bin: string): Promise<Container[]> {
       c.memLimit = memToBytes(limit)
       c.memPercent = parseFloat((memPerc || "").replace("%", "")) || 0
 
-      const net = pairToBytes(netIO)   // { a: rx, b: tx }
-      const blk = pairToBytes(blkIO)   // { a: read, b: write }
-      seen.add(id)
-      const prev = ioPrev[id]
-      if (prev && now > prev.ts) {
-        const dt = (now - prev.ts) / 1000
-        // Guard counter resets (container restart): negative delta → skip that field.
-        if (net.a >= prev.rx) c.netIn = Math.round((net.a - prev.rx) / dt)
-        if (net.b >= prev.tx) c.netOut = Math.round((net.b - prev.tx) / dt)
-        if (blk.a >= prev.rd) c.blkRead = Math.round((blk.a - prev.rd) / dt)
-        if (blk.b >= prev.wr) c.blkWrite = Math.round((blk.b - prev.wr) / dt)
-      }
-      ioPrev[id] = { rx: net.a, tx: net.b, rd: blk.a, wr: blk.b, ts: now }
+      statsIo.set(id, { net: pairToBytes(netIO), blk: pairToBytes(blkIO) })
     }
-    // Drop prev samples for containers no longer present.
-    for (const k of Object.keys(ioPrev)) if (!seen.has(k)) delete ioPrev[k]
   } catch (err) {
     console.error("docker: stats collection failed:", (err as Error).message)
   }
@@ -175,21 +236,47 @@ async function collectContainers(bin: string): Promise<Container[]> {
   // template errors with `map has no entry for key "Health"` for containers
   // without a healthcheck, which would fail the whole batch. Health is parsed
   // from the ps `Status` string ("(healthy)" / "(unhealthy)") instead.
+  // Pid + network mode ride the same call, for the exact IO counters.
+  const procInfo = new Map<string, { pid: number; hostNet: boolean }>()
   try {
     const ids = containers.map((c) => c.id).join(" ")
-    const inspectFmt = '{{.Id}}|{{.RestartCount}}|{{.State.ExitCode}}'
+    const inspectFmt = '{{.Id}}|{{.RestartCount}}|{{.State.ExitCode}}|{{.State.Pid}}|{{.HostConfig.NetworkMode}}'
     const { stdout: inspOut } = await execAsync(`${bin} inspect --format '${inspectFmt}' ${ids}`, EXEC_OPTS)
     for (const line of inspOut.split("\n")) {
       if (!line.trim()) continue
-      const [fullId, restarts, exitCode] = line.split("|")
+      const [fullId, restarts, exitCode, pid, netMode] = line.split("|")
       const c = byId.get(fullId.slice(0, 12))
       if (!c) continue
       c.restarts = parseInt(restarts, 10) || 0
       c.exitCode = parseInt(exitCode, 10) || 0
+      procInfo.set(c.id, { pid: parseInt(pid, 10) || 0, hostNet: (netMode || "").trim() === "host" })
     }
   } catch (err) {
     console.error("docker: inspect collection failed:", (err as Error).message)
   }
+
+  // 3b. Per-second IO rates: exact kernel counters where readable, the rounded
+  // stats strings otherwise. Only containers docker stats saw (i.e. running).
+  const now = Date.now()
+  await Promise.all([...statsIo].map(async ([id, fromStats]) => {
+    const c = byId.get(id)
+    if (!c) return
+    const info = procInfo.get(id)
+    const exact = info ? await readExactIo(info.pid, info.hostNet) : { net: null, blk: null }
+    const net: IoPair = exact.net ? { ...exact.net, src: "exact" } : { ...fromStats.net, src: "stats" }
+    const blk: IoPair = exact.blk ? { ...exact.blk, src: "exact" } : { ...fromStats.blk, src: "stats" }
+    const prev = ioPrev[id]
+    const dt = prev ? (now - prev.ts) / 1000 : 0
+    const pn = prev?.net?.src === net.src ? prev.net : undefined
+    const pb = prev?.blk?.src === blk.src ? prev.blk : undefined
+    c.netIn = ioRate(net.a, pn?.a, dt)
+    c.netOut = ioRate(net.b, pn?.b, dt)
+    c.blkRead = ioRate(blk.a, pb?.a, dt)
+    c.blkWrite = ioRate(blk.b, pb?.b, dt)
+    ioPrev[id] = { net, blk, ts: now }
+  }))
+  // Drop prev samples for containers no longer present.
+  for (const k of Object.keys(ioPrev)) if (!statsIo.has(k)) delete ioPrev[k]
 
   // 4. For UNHEALTHY containers only, read the healthcheck's own last output.
   //
