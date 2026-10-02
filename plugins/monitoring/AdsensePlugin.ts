@@ -26,7 +26,7 @@ interface AdsenseConfig {
   timeout?: number
 }
 
-export interface AdsenseDay { date: string; earnings: number; pageViews: number }
+export interface AdsenseDay { date: string; earnings: number; pageViews: number; clicks: number }
 
 /** YYYY-MM-DD shifted by whole days. */
 export function shiftDate(date: string, days: number): string {
@@ -61,6 +61,7 @@ export function reportUrl(account: string, start: string, end: string, bySite = 
   }
   q.append("metrics", "ESTIMATED_EARNINGS")
   q.append("metrics", "PAGE_VIEWS")
+  q.append("metrics", "CLICKS")
   return `${API}/${account}/reports:generate?${q}`
 }
 
@@ -68,7 +69,7 @@ export function reportUrl(account: string, start: string, end: string, bySite = 
 export function parseReport(report: any): { currency: string; days: AdsenseDay[] } {
   const headers: any[] = Array.isArray(report?.headers) ? report.headers : []
   const col = (name: string) => headers.findIndex((h) => h?.name === name)
-  const [iDate, iEarn, iViews] = [col("DATE"), col("ESTIMATED_EARNINGS"), col("PAGE_VIEWS")]
+  const [iDate, iEarn, iViews, iClicks] = [col("DATE"), col("ESTIMATED_EARNINGS"), col("PAGE_VIEWS"), col("CLICKS")]
   if (iDate < 0 || iEarn < 0) throw new Error("unexpected report shape (no DATE/ESTIMATED_EARNINGS column)")
   // A day with no traffic has no row at all, so an empty report is valid.
   const rows: any[] = Array.isArray(report?.rows) ? report.rows : []
@@ -78,6 +79,7 @@ export function parseReport(report: any): { currency: string; days: AdsenseDay[]
       date: String(r?.cells?.[iDate]?.value || ""),
       earnings: Number(r?.cells?.[iEarn]?.value) || 0,
       pageViews: iViews < 0 ? 0 : Number(r?.cells?.[iViews]?.value) || 0,
+      clicks: iClicks < 0 ? 0 : Number(r?.cells?.[iClicks]?.value) || 0,
     })),
   }
 }
@@ -100,6 +102,7 @@ export function parseSiteReport(report: any): Map<string, AdsenseDay[]> {
     if (same) {
       same.earnings += days[i].earnings
       same.pageViews += days[i].pageViews
+      same.clicks += days[i].clicks
     } else list.push({ ...days[i] })
   })
   return out
@@ -130,7 +133,7 @@ const cents = (n: number) => Math.round(n * 100) / 100
 /** Roll per-day rows up into the figures the tile shows. `last7` includes today, as AdSense's own "Last 7 days" does. */
 export function summarize(days: AdsenseDay[], today: string) {
   const by = new Map(days.map((d) => [d.date, d]))
-  const day = (date: string): AdsenseDay => by.get(date) || { date, earnings: 0, pageViews: 0 }
+  const day = (date: string): AdsenseDay => by.get(date) || { date, earnings: 0, pageViews: 0, clicks: 0 }
   const span = (n: number) => Array.from({ length: n }, (_, i) => day(shiftDate(today, i - n + 1)))
   const week = span(7)
   const last7 = week.reduce((s, d) => s + d.earnings, 0)
@@ -142,6 +145,7 @@ export function summarize(days: AdsenseDay[], today: string) {
     last7: cents(last7),
     monthToDate: cents(days.filter((d) => d.date.startsWith(month)).reduce((s, d) => s + d.earnings, 0)),
     pageViews7,
+    clicks7: week.reduce((s, d) => s + d.clicks, 0),
     // Page RPM over the same 7 days: earnings per thousand page views.
     rpm: pageViews7 ? cents((last7 / pageViews7) * 1000) : 0,
     // Gap-filled so the sparkline has one point per day, oldest first.
