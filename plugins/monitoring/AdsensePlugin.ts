@@ -117,7 +117,7 @@ async function getJson(url: string, init: RequestInit, timeout: number): Promise
 export function createAdsensePlugin() {
   let refreshTimer: any = null
   // Resolved once: the account and its time zone do not change between polls.
-  let account: { name: string; timeZone?: string } | null = null
+  let account: { name: string; displayName?: string; timeZone?: string } | null = null
 
   const collect = async (cfg: AdsenseConfig): Promise<any> => {
     const timeout = cfg.timeout || 15000
@@ -137,12 +137,20 @@ export function createAdsensePlugin() {
       const list: any[] = (await getJson(`${API}/accounts`, auth, timeout))?.accounts || []
       const a = cfg.accountId ? list.find((x) => x.name === cfg.accountId) : list[0]
       if (!a) throw new Error(cfg.accountId ? `account ${cfg.accountId} not visible to this token` : "no AdSense account visible to this token")
-      account = { name: a.name, timeZone: a.timeZone?.id }
+      account = { name: a.name, displayName: a.displayName, timeZone: a.timeZone?.id }
     }
 
     const today = todayIn(account.timeZone)
     const { currency, days } = parseReport(await getJson(reportUrl(account.name, reportStart(today), today), auth, timeout))
-    return { accountId: account.name, currency, asOf: today, ...summarize(days, today) }
+    return {
+      // The account's own name ("The Architect's Newspaper") labels the service.
+      // It overrides the plugin's instance name, which only says "AdSense".
+      ...(account.displayName ? { name: account.displayName } : {}),
+      accountId: account.name,
+      currency,
+      asOf: today,
+      ...summarize(days, today),
+    }
   }
 
   const refreshFn = async (plugin: MonitoringPluginBase): Promise<void> => {
