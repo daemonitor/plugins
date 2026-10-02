@@ -82,7 +82,7 @@ export function parseReport(report: any): { currency: string; days: AdsenseDay[]
   }
 }
 
-/** A DATE x DOMAIN_NAME report -> per-day rows keyed by domain. */
+/** A DATE x DOMAIN_NAME report -> per-day rows keyed by site (hostname without a leading www). */
 export function parseSiteReport(report: any): Map<string, AdsenseDay[]> {
   const headers: any[] = Array.isArray(report?.headers) ? report.headers : []
   const iDomain = headers.findIndex((h) => h?.name === "DOMAIN_NAME")
@@ -91,10 +91,16 @@ export function parseSiteReport(report: any): Map<string, AdsenseDay[]> {
   const { days } = parseReport(report)
   const rows: any[] = Array.isArray(report?.rows) ? report.rows : []
   rows.forEach((r, i) => {
-    const domain = String(r?.cells?.[iDomain]?.value || "")
+    // www.example.com and example.com are one site to a reader, so they merge.
+    const domain = String(r?.cells?.[iDomain]?.value || "").replace(/^www\./, "")
     if (!domain) return
     if (!out.has(domain)) out.set(domain, [])
-    out.get(domain)!.push(days[i])
+    const list = out.get(domain)!
+    const same = list.find((d) => d.date === days[i].date)
+    if (same) {
+      same.earnings += days[i].earnings
+      same.pageViews += days[i].pageViews
+    } else list.push({ ...days[i] })
   })
   return out
 }

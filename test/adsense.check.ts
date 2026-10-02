@@ -70,14 +70,15 @@ const siteReport = {
     { cells: [{ value: "2026-10-01" }, { value: "www.big.example" }, { value: "30.00" }, { value: "9000" }] },
     { cells: [{ value: "2026-10-02" }, { value: "www.big.example" }, { value: "1.25" }, { value: "400" }] },
     { cells: [{ value: "2026-10-02" }, { value: "admin.big.example" }, { value: "0.00" }, { value: "60" }] },
+    { cells: [{ value: "2026-10-02" }, { value: "big.example" }, { value: "0.25" }, { value: "50" }] },
   ],
 }
 const sites = summarizeSites(parseSiteReport(siteReport), "2026-10-02")
-// Biggest earner first; the zero-earning admin host is dropped.
-assert.deepEqual(sites.map((x) => x.domain), ["www.big.example", "small.example"])
-assert.deepEqual([sites[0].today, sites[0].yesterday, sites[0].last7, sites[0].pageViews7], [1.25, 30, 31.25, 9400])
+// Biggest earner first; the zero-earning admin host is dropped; www and bare host merge.
+assert.deepEqual(sites.map((x) => x.domain), ["big.example", "small.example"])
+assert.deepEqual([sites[0].today, sites[0].yesterday, sites[0].last7, sites[0].pageViews7], [1.5, 30, 31.5, 9450])
 assert.equal(sites[0].daily.length, 30)
-assert.deepEqual(sites[0].daily.slice(-2), [30, 1.25]) // earnings only, oldest first
+assert.deepEqual(sites[0].daily.slice(-2), [30, 1.5]) // earnings only, oldest first
 assert.equal(sites[1].today, 0)
 assert.deepEqual(summarizeSites(parseSiteReport({ headers: report.headers, rows: report.rows }), "2026-10-02"), []) // no DOMAIN_NAME column
 
