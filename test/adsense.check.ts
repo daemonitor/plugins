@@ -1,6 +1,6 @@
 // Run: bun test/adsense.check.ts
 import assert from "node:assert/strict"
-import { shiftDate, todayIn, reportStart, reportUrl, parseReport, summarize } from "../plugins/monitoring/AdsensePlugin.ts"
+import { shiftDate, todayIn, reportStart, reportUrl, parseReport, summarize, parseSiteReport, summarizeSites } from "../plugins/monitoring/AdsensePlugin.ts"
 
 // Date shifts cross month and year boundaries.
 assert.equal(shiftDate("2026-03-01", -1), "2026-02-28")
@@ -54,5 +54,31 @@ assert.equal(s.daily[26].earnings, 0) // 2026-09-29 had no row
 // An empty account reads as zeroes, with no divide-by-zero in RPM.
 const empty = summarize([], "2026-10-02")
 assert.deepEqual([empty.today, empty.last7, empty.monthToDate, empty.rpm], [0, 0, 0, 0])
+
+// Per-site: one report with DATE x DOMAIN_NAME, split by domain.
+assert.ok(reportUrl("accounts/pub-1", "2026-09-03", "2026-10-02", true).includes("dimensions=DATE&dimensions=DOMAIN_NAME"))
+assert.ok(!url.includes("DOMAIN_NAME"))
+const siteReport = {
+  headers: [
+    { name: "DATE", type: "DIMENSION" },
+    { name: "DOMAIN_NAME", type: "DIMENSION" },
+    { name: "ESTIMATED_EARNINGS", type: "METRIC_CURRENCY", currencyCode: "USD" },
+    { name: "PAGE_VIEWS", type: "METRIC_TALLY" },
+  ],
+  rows: [
+    { cells: [{ value: "2026-10-01" }, { value: "small.example" }, { value: "0.50" }, { value: "100" }] },
+    { cells: [{ value: "2026-10-01" }, { value: "www.big.example" }, { value: "30.00" }, { value: "9000" }] },
+    { cells: [{ value: "2026-10-02" }, { value: "www.big.example" }, { value: "1.25" }, { value: "400" }] },
+    { cells: [{ value: "2026-10-02" }, { value: "admin.big.example" }, { value: "0.00" }, { value: "60" }] },
+  ],
+}
+const sites = summarizeSites(parseSiteReport(siteReport), "2026-10-02")
+// Biggest earner first; the zero-earning admin host is dropped.
+assert.deepEqual(sites.map((x) => x.domain), ["www.big.example", "small.example"])
+assert.deepEqual([sites[0].today, sites[0].yesterday, sites[0].last7, sites[0].pageViews7], [1.25, 30, 31.25, 9400])
+assert.equal(sites[0].daily.length, 30)
+assert.deepEqual(sites[0].daily.slice(-2), [30, 1.25]) // earnings only, oldest first
+assert.equal(sites[1].today, 0)
+assert.deepEqual(summarizeSites(parseSiteReport({ headers: report.headers, rows: report.rows }), "2026-10-02"), []) // no DOMAIN_NAME column
 
 console.log("adsense checks passed")

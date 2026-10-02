@@ -48,8 +48,11 @@ export function reportStart(today: string): string {
   return back < monthStart ? back : monthStart
 }
 
-export function reportUrl(account: string, start: string, end: string): string {
+export function reportUrl(account: string, start: string, end: string, bySite = false): string {
   const q = new URLSearchParams({ dateRange: "CUSTOM", reportingTimeZone: "ACCOUNT_TIME_ZONE", dimensions: "DATE" })
+  // DOMAIN_NAME, not OWNED_SITE_DOMAIN_NAME: the owned-site rows nest (archpaper.com
+  // contains www.archpaper.com and jobs.archpaper.com), so they double count.
+  if (bySite) q.append("dimensions", "DOMAIN_NAME")
   for (const [k, v] of [["startDate", start], ["endDate", end]]) {
     const [y, m, d] = v.split("-").map(Number)
     q.set(`${k}.year`, String(y))
@@ -77,6 +80,43 @@ export function parseReport(report: any): { currency: string; days: AdsenseDay[]
       pageViews: iViews < 0 ? 0 : Number(r?.cells?.[iViews]?.value) || 0,
     })),
   }
+}
+
+/** A DATE x DOMAIN_NAME report -> per-day rows keyed by domain. */
+export function parseSiteReport(report: any): Map<string, AdsenseDay[]> {
+  const headers: any[] = Array.isArray(report?.headers) ? report.headers : []
+  const iDomain = headers.findIndex((h) => h?.name === "DOMAIN_NAME")
+  const out = new Map<string, AdsenseDay[]>()
+  if (iDomain < 0) return out
+  const { days } = parseReport(report)
+  const rows: any[] = Array.isArray(report?.rows) ? report.rows : []
+  rows.forEach((r, i) => {
+    const domain = String(r?.cells?.[iDomain]?.value || "")
+    if (!domain) return
+    if (!out.has(domain)) out.set(domain, [])
+    out.get(domain)!.push(days[i])
+  })
+  return out
+}
+
+const MAX_SITES = 20
+
+/**
+ * Per-site figures, biggest earner first. Domains that earned nothing in the
+ * window are dropped: AdSense lists every hostname an ad tag loaded on, which
+ * includes admin hosts and previews that are noise here. `daily` is earnings
+ * only, to keep the payload small.
+ */
+export function summarizeSites(bySite: Map<string, AdsenseDay[]>, today: string) {
+  return [...bySite.entries()]
+    .map(([domain, days]) => {
+      const sum = summarize(days, today)
+      return { domain, ...sum, daily: sum.daily.map((d) => cents(d.earnings)), window: days.reduce((t, d) => t + d.earnings, 0) }
+    })
+    .filter((s) => s.window > 0)
+    .sort((a, b) => b.window - a.window)
+    .slice(0, MAX_SITES)
+    .map(({ window: _window, ...site }) => site)
 }
 
 const cents = (n: number) => Math.round(n * 100) / 100
@@ -141,7 +181,13 @@ export function createAdsensePlugin() {
     }
 
     const today = todayIn(account.timeZone)
-    const { currency, days } = parseReport(await getJson(reportUrl(account.name, reportStart(today), today), auth, timeout))
+    const start = reportStart(today)
+    const { currency, days } = parseReport(await getJson(reportUrl(account.name, start, today), auth, timeout))
+    // The per-site breakdown is extra: if it fails, the account totals still report.
+    let sites: ReturnType<typeof summarizeSites> = []
+    try {
+      sites = summarizeSites(parseSiteReport(await getJson(reportUrl(account.name, start, today, true), auth, timeout)), today)
+    } catch { /* totals only */ }
     return {
       // The account's own name ("The Architect's Newspaper") labels the service.
       // It overrides the plugin's instance name, which only says "AdSense".
@@ -150,6 +196,7 @@ export function createAdsensePlugin() {
       currency,
       asOf: today,
       ...summarize(days, today),
+      sites,
     }
   }
 
