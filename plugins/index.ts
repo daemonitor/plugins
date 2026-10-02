@@ -11,6 +11,7 @@ import { createSnmpPlugin } from "./monitoring/SnmpPlugin.js"
 import { createThreeCXPlugin } from "./monitoring/ThreeCXPlugin.js"
 import { createTplinkPlugin } from "./monitoring/TplinkPlugin.js"
 import { createPatroniPlugin } from "./monitoring/PatroniPlugin.js"
+import { createAdsensePlugin } from "./monitoring/AdsensePlugin.js"
 
 // In future, implement other plugin factory functions using the same pattern
 // import { createOSPlugin } from "./monitoring/OSPlugin.js"
@@ -35,6 +36,7 @@ export default {
     ThreeCX: createThreeCXPlugin,
     Tplink: createTplinkPlugin,
     Patroni: createPatroniPlugin,
+    Adsense: createAdsensePlugin,
     // CloudflarePlugin: createCloudflarePlugin,
     // EwelinkPlugin: createEwelinkPlugin,
     // MongoDBPlugin: createMongoDBPlugin,
