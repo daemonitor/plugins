@@ -153,7 +153,7 @@ export function summarize(days: AdsenseDay[], today: string) {
   }
 }
 
-async function getJson(url: string, init: RequestInit, timeout: number): Promise<any> {
+export async function getJson(url: string, init: RequestInit, timeout: number): Promise<any> {
   const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeout) })
   const body: any = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -164,6 +164,24 @@ async function getJson(url: string, init: RequestInit, timeout: number): Promise
   return body
 }
 
+/** Trade a refresh token for a one-hour access token. Shared with the ga4 plugin. */
+export async function googleAccessToken(
+  cfg: { clientId?: string; clientSecret?: string; refreshToken?: string },
+  timeout: number,
+): Promise<string> {
+  const tok = await getJson(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: cfg.clientId || "",
+      client_secret: cfg.clientSecret || "",
+      refresh_token: cfg.refreshToken || "",
+    }).toString(),
+  }, timeout)
+  return tok.access_token
+}
+
 export function createAdsensePlugin() {
   let refreshTimer: any = null
   // Resolved once: the account and its time zone do not change between polls.
@@ -171,17 +189,7 @@ export function createAdsensePlugin() {
 
   const collect = async (cfg: AdsenseConfig): Promise<any> => {
     const timeout = cfg.timeout || 15000
-    const tok = await getJson(TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        client_id: cfg.clientId || "",
-        client_secret: cfg.clientSecret || "",
-        refresh_token: cfg.refreshToken || "",
-      }).toString(),
-    }, timeout)
-    const auth = { headers: { Authorization: `Bearer ${tok.access_token}` } }
+    const auth = { headers: { Authorization: `Bearer ${await googleAccessToken(cfg, timeout)}` } }
 
     if (!account) {
       const list: any[] = (await getJson(`${API}/accounts`, auth, timeout))?.accounts || []
@@ -230,9 +238,9 @@ export function createAdsensePlugin() {
 
   const monitorFn = async (plugin: MonitoringPluginBase): Promise<void> => {
     await refreshFn(plugin)
-    // AdSense figures lag by hours; 10 minutes keeps the row inside the
-    // server's 15-minute staleness window without spending API quota.
-    refreshTimer = setInterval(() => refreshFn(plugin), (plugin.config as AdsenseConfig)?.refreshInterval || 600000)
+    // AdSense figures lag by hours, so 15 minutes loses nothing. The server
+    // allows these rows 30 minutes of silence before calling them offline.
+    refreshTimer = setInterval(() => refreshFn(plugin), (plugin.config as AdsenseConfig)?.refreshInterval || 900000)
   }
 
   const teardownFn = async (): Promise<void> => {
