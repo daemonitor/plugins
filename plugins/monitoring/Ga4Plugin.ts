@@ -27,6 +27,13 @@ interface Ga4Config {
   clientId?: string
   clientSecret?: string
   refreshToken?: string
+  /**
+   * GA account ids to collect, e.g. ["842890"]. A Google login often sees more
+   * accounts than belong to the customer whose agent this is, and everything
+   * collected lands in that customer's view. Leave unset only when the login
+   * sees nothing but this customer's accounts.
+   */
+  accounts?: string[]
   refreshInterval?: number
   timeout?: number
 }
@@ -135,7 +142,10 @@ export function createGa4Plugin() {
       page = r?.nextPageToken || ""
     } while (page)
 
-    const accounts = parseAccounts(summaries)
+    const allow = Array.isArray(cfg.accounts) && cfg.accounts.length ? new Set(cfg.accounts.map(String)) : null
+    // Filtered before any report is requested: an account outside the list is
+    // never queried, so its figures never reach this customer.
+    const accounts = parseAccounts(summaries).filter((a) => !allow || allow.has(a.id))
     for (const account of accounts) {
       account.properties = await inBatches(account.properties, CONCURRENCY, async (p) => {
         // One property failing (no access to its data, quota) must not hide the rest.
