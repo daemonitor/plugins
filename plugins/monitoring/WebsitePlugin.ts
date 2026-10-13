@@ -36,6 +36,9 @@ interface Endpoint {
     unexpectedStrings?: string[]
     expectedStatusCode?: number
     timeout?: number
+    // Sent on the public check, e.g. a key a WAF skip rule matches so a bot
+    // challenge doesn't 403 the checker.
+    headers?: Record<string, string>
     origin?: OriginCheck
     // Origin-only: the public URL can't be checked (e.g. a Cloudflare bot
     // challenge 403s the checker), so the direct `origin` check IS the health
@@ -192,7 +195,7 @@ export function createWebsitePlugin() {
         try {
             const ctrl = new AbortController()
             const t = ep.timeout ? setTimeout(() => ctrl.abort(), ep.timeout) : null
-            const res = await fetch(ep.url, { signal: ctrl.signal, redirect: "follow" })
+            const res = await fetch(ep.url, { signal: ctrl.signal, redirect: "follow", headers: ep.headers })
             if (t) clearTimeout(t)
             const body = await res.text()
             const duration = Date.now() - start
@@ -250,6 +253,7 @@ export function createWebsitePlugin() {
                 unexpectedStrings: cfg.unexpectedStrings,
                 expectedStatusCode: cfg.expectedStatusCode,
                 timeout: cfg.timeout,
+                headers: cfg.headers,
                 origin: cfg.origin,
             }]
         }
