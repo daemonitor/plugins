@@ -42,6 +42,7 @@ assert.equal(r.interfaces[2].speed, undefined)
 assert.deepEqual(r.loops, ["port 2"])
 assert.deepEqual(r.blocked, ["port 3"])
 assert.deepEqual(r.downUplinks, ["port 3"])
+assert.deepEqual(r.uplinks, ["port 4", "port 3"])
 // a configured uplink that doesn't exist counts as down
 assert.deepEqual(buildReport({ host: "h", uplinkPorts: [9] }, raw, new Map()).downUplinks, ["port 9"])
 // a given name wins over the model
