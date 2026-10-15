@@ -13,6 +13,7 @@ import { createTplinkPlugin } from "./monitoring/TplinkPlugin.js"
 import { createPatroniPlugin } from "./monitoring/PatroniPlugin.js"
 import { createAdsensePlugin } from "./monitoring/AdsensePlugin.js"
 import { createGa4Plugin } from "./monitoring/Ga4Plugin.js"
+import { createTplinkSwitchPlugin } from "./monitoring/TplinkSwitchPlugin.js"
 
 // In future, implement other plugin factory functions using the same pattern
 // import { createOSPlugin } from "./monitoring/OSPlugin.js"
@@ -39,6 +40,7 @@ export default {
     Patroni: createPatroniPlugin,
     Adsense: createAdsensePlugin,
     Ga4: createGa4Plugin,
+    TplinkSwitch: createTplinkSwitchPlugin,
     // CloudflarePlugin: createCloudflarePlugin,
     // EwelinkPlugin: createEwelinkPlugin,
     // MongoDBPlugin: createMongoDBPlugin,
