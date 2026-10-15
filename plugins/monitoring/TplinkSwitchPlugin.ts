@@ -102,6 +102,8 @@ export function buildReport(
     interfaces,
     loops: interfaces.filter((i) => i.loop === "loop").map((i) => i.name),
     blocked: interfaces.filter((i) => i.loop === "blocked").map((i) => i.name),
+    // Every configured uplink, so the dashboard can mark it while it's healthy too.
+    uplinks: (target.uplinkPorts || []).map((id) => `port ${id}`),
     downUplinks: downUplinks.map((id) => `port ${id}`),
   }
 }
