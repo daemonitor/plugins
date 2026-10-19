@@ -74,6 +74,24 @@ assert.deepEqual(g.breakdown[0], { name: "Compute Engine", amount: 12.5 })
 assert.ok(sent.query.includes("`p.billing.gcp_billing_export_v1_0123`") && sent.queryParameters[0].parameterValue.value === "2026-09-20")
 // The table name is spliced into SQL, so anything but project.dataset.table is refused.
 await assert.rejects(collectCost({ ...gcfg, table: "p.d.t` WHERE 1=1 --" }), /table must look like/)
+// workspace: seats x list price, spread evenly over the month. 10 Standard + 2 Starter, flexible plan.
+globalThis.fetch = (async (url: string) => {
+  if (String(url).includes("oauth2")) return new Response(JSON.stringify({ access_token: "t" }), { status: 200 })
+  const items = [
+    ...Array.from({ length: 10 }, () => ({ skuId: "1010020028", skuName: "Google Workspace Business Standard" })),
+    ...Array.from({ length: 2 }, () => ({ skuId: "1010020027", skuName: "Google Workspace Business Starter" })),
+  ]
+  return new Response(JSON.stringify({ items }), { status: 200 })
+}) as any
+const wcfg = { provider: "workspace", clientId: "a", clientSecret: "b", refreshToken: "c", customerId: "C0" }
+const w = await collectCost(wcfg, "2026-10-19")
+const monthlyBill = 10 * 16.8 + 2 * 8.4
+assert.equal(w.projected, Math.round(monthlyBill * 100) / 100) // the projection is the monthly bill
+assert.equal(w.monthToDate, Math.round((monthlyBill / 31) * 19 * 100) / 100)
+assert.equal(w.breakdown[0].name, "Google Workspace Business Standard × 10")
+// A negotiated price overrides the list price, by SKU name or id.
+const wo = await collectCost({ ...wcfg, prices: { "Google Workspace Business Standard": 12, "1010020027": 0 } }, "2026-10-19")
+assert.equal(wo.projected, 120)
 globalThis.fetch = realFetch
 
 console.log("cost checks passed")

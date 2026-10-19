@@ -311,6 +311,55 @@ const metaAds: CostFetcher = async (cfg, { start, end }, timeout) => {
   return { currency: currency || "USD", days: t.days(), breakdown: t.breakdown() }
 }
 
+// Google Workspace: there is no invoice API, so this is seats x price. The
+// Licensing API lists every assigned seat with its plan (SKU), and seats are
+// priced from Google's published list prices (USD per seat per month) unless
+// `prices` overrides them by SKU name or id. The bill accrues evenly through the
+// month, so each day carries 1/daysInMonth of it and the projection is the
+// monthly bill itself.
+// ponytail: today's seat count is applied to the whole 30-day trace (no seat
+// history), and Enterprise plans have no public price, so they cost 0 until
+// `prices` names one.
+export const WORKSPACE_LIST_PRICE: Record<string, { flexible: number; annual: number }> = {
+  "1010020027": { flexible: 8.4, annual: 7 }, // Business Starter
+  "1010020028": { flexible: 16.8, annual: 14 }, // Business Standard
+  "1010020025": { flexible: 26.4, annual: 22 }, // Business Plus
+}
+const workspace: CostFetcher = async (cfg, { start, end }, timeout) => {
+  need(cfg, "clientId", "clientSecret", "refreshToken", "customerId")
+  const auth = { headers: { Authorization: `Bearer ${await googleAccessToken({ clientId: cfg.clientId, clientSecret: cfg.clientSecret, refreshToken: cfg.refreshToken }, timeout)}` } }
+  const seats = new Map<string, { name: string; count: number }>()
+  for (const product of cfg.products || ["Google-Apps"]) {
+    let page = ""
+    do {
+      const q = new URLSearchParams({ customerId: cfg.customerId, maxResults: "1000", ...(page ? { pageToken: page } : {}) })
+      const body = await json(`https://licensing.googleapis.com/apps/licensing/v1/product/${encodeURIComponent(product)}/users?${q}`, auth, timeout)
+      for (const a of body.items || []) {
+        const e = seats.get(a.skuId) || { name: a.skuName || a.skuId, count: 0 }
+        e.count++
+        seats.set(a.skuId, e)
+      }
+      page = body.nextPageToken || ""
+    } while (page)
+  }
+  const plan = cfg.plan === "annual" ? "annual" : "flexible"
+  const priceOf = (sku: string, name: string) =>
+    Number(cfg.prices?.[sku] ?? cfg.prices?.[name] ?? WORKSPACE_LIST_PRICE[sku]?.[plan] ?? 0)
+  const lines = [...seats].map(([sku, { name, count }]) => ({ name: `${name} × ${count}`, monthly: count * priceOf(sku, name) }))
+  const monthly = lines.reduce((s, l) => s + l.monthly, 0)
+  const [y = 1970, m = 1] = end.split("-").map(Number)
+  const dim = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  const days: CostDay[] = []
+  for (let d = start; d <= end; d = nextDay(d)) days.push({ date: d, amount: monthly / dim })
+  const dom = Number(end.slice(8, 10))
+  return {
+    currency: "USD",
+    days,
+    // Month to date per plan, so the breakdown sums to the row's MTD.
+    breakdown: lines.map((l) => ({ name: l.name, amount: (l.monthly / dim) * dom })),
+  }
+}
+
 export const PROVIDERS: Record<string, CostFetcher> = {
-  openai, anthropic, aws, vercel, fastly, cloudflare, posthog, gcp, "google-ads": googleAds, "meta-ads": metaAds,
+  openai, anthropic, aws, vercel, fastly, cloudflare, posthog, gcp, workspace, "google-ads": googleAds, "meta-ads": metaAds,
 }

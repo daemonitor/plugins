@@ -1,4 +1,5 @@
 import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
+import { PluginManager } from "../../lib/PluginManager.js"
 import { PROVIDERS } from "./CostProviders.js"
 
 // Spend monitor: what a service bills you, per provider, as one row each.
@@ -30,6 +31,8 @@ export interface CostProviderConfig {
   name?: string
   /** Monthly budget in the account currency. Projected over = warning, MTD over = error. */
   budget?: number
+  /** Name of another top-level config block to take credentials from. */
+  authFrom?: string
   /** Yesterday above this multiple of the prior 7-day average is a spike. Default 3. */
   spikeFactor?: number
   timeout?: number
@@ -105,6 +108,9 @@ export function summarizeCost(f: CostFetch, today: string) {
 }
 
 export async function collectCost(p: CostProviderConfig, today = todayUtc()) {
+  // `authFrom` borrows credentials from another config block, e.g. the
+  // top-level `workspace` block google-auth.mjs writes.
+  if (p.authFrom) p = { ...PluginManager.getConfig(p.authFrom), ...p }
   const fetcher = PROVIDERS[p.provider]
   if (!fetcher) throw new Error(`unknown cost provider "${p.provider}" (have: ${Object.keys(PROVIDERS).join(", ")})`)
   const f = await fetcher(p, { start: fetchStart(today), end: today }, p.timeout || 20000)
