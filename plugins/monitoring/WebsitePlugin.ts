@@ -194,10 +194,17 @@ export function createWebsitePlugin() {
         let publicResult: any
         try {
             const ctrl = new AbortController()
-            const t = ep.timeout ? setTimeout(() => ctrl.abort(), ep.timeout) : null
-            const res = await fetch(ep.url, { signal: ctrl.signal, redirect: "follow", headers: ep.headers })
-            if (t) clearTimeout(t)
-            const body = await res.text()
+            // Always bounded: with no timer the runtime's own 5 minute limit
+            // applied, and a hung page held up every check queued behind it.
+            // Cleared after the body, which can stall as well as the headers.
+            const t = setTimeout(() => ctrl.abort(), ep.timeout || 30000)
+            let res: Response, body: string
+            try {
+                res = await fetch(ep.url, { signal: ctrl.signal, redirect: "follow", headers: ep.headers })
+                body = await res.text()
+            } finally {
+                clearTimeout(t)
+            }
             const duration = Date.now() - start
 
             const { ok, hasAllExpectedStrings, hasAnyUnexpectedStrings, missingExpected, matchedUnexpected } = evaluate(
@@ -296,10 +303,19 @@ export function createWebsitePlugin() {
         return [...merged.values()]
     }
 
+    // One pass at a time. Overlapping passes report out of order, so a check
+    // that hung minutes ago lands after a newer success and re-raises the alert.
+    let running = false
     const refreshFn = async (plugin: MonitoringPluginBase): Promise<void> => {
-        const eps = await endpointsOf(plugin)
-        for (const ep of eps) {
-            if (ep?.url) await check(plugin, ep)
+        if (running) return
+        running = true
+        try {
+            const eps = await endpointsOf(plugin)
+            for (const ep of eps) {
+                if (ep?.url) await check(plugin, ep)
+            }
+        } finally {
+            running = false
         }
     }
 
