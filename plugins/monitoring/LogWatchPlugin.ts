@@ -10,6 +10,8 @@ import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/Monitori
 //   • webshell exec: a .php under wp-content/uploads (never legit) or a plugin
 //                    dir invoked with a command-style/base64 query
 //   • xmlrpc brute:  a burst of POST /xmlrpc.php from one IP
+//   • subscribe fail: archpaper's /subscribe/ form answered "Security check
+//                    failed" (stale nonce in the page cache, 2026-10-23)
 //
 // It works identically for Cloudflare-fronted and direct-origin sites (it reads
 // the log at the origin), so it covers the "Mixed" fleet with one mechanism. The
@@ -58,6 +60,8 @@ interface Entry {
   method: string
   path: string // request target (may include query)
   status: number
+  bytes: number // body bytes sent, -1 when the line doesn't carry it
+  referer: string
   ua: string
 }
 
@@ -77,7 +81,7 @@ const MAX_READ = 5 * 1024 * 1024
 //      $http_cf_connecting_ip is present it is logged AFTER $remote_addr (the CF
 //      edge), so "last IP" is the visitor, not the edge; when it's absent there
 //      is a single IP ($remote_addr) and "last" == "only".
-const REQ = /"([A-Z]+)\s+([^ "]+)[^"]*"\s+"?(\d{3})/
+const REQ = /"([A-Z]+)\s+([^ "]+)[^"]*"\s+"?(\d{3})(?:"?\s+(\d+|-)\s+"([^"]*)")?/
 const IP_TOKEN = /^(?:(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F]{0,4})$/
 
 function parseLine(line: string): Entry | null {
@@ -95,7 +99,8 @@ function parseLine(line: string): Entry | null {
   // origin address — there is no site name to report and "" is correct.
   const first = tokens[0] || ""
   const host = first !== "-" && !IP_TOKEN.test(first) ? first : ""
-  return { host, ip, method: rq[1], path: rq[2], status: Number(rq[3]), ua: "" }
+  const bytes = rq[4] && rq[4] !== "-" ? Number(rq[4]) : -1
+  return { host, ip, method: rq[1], path: rq[2], status: Number(rq[3]), bytes, referer: rq[5] || "", ua: "" }
 }
 
 const SUSPICIOUS_QUERY = /(?:^|[?&])(c|k|cmd|exec|e|q|f|file|dir|download|0|1|a)=/i
@@ -106,6 +111,12 @@ const BATCH_PATH = /^\/wp-json\/batch\/v1|rest_route=\/?batch\/v1/i
 // wp-admin paths that answer 2xx to anonymous callers, so a 2xx on them proves
 // nothing about being logged in. Everything else under /wp-admin/ redirects a
 // logged-out visitor to the login form.
+// The omnisend-integration mu-plugin's wp_send_json_error "Security check
+// failed" gzips to exactly 79 bytes; success gzips to 77. Matching on size is
+// the only signal the access log carries, so a change to that message or to
+// nginx's gzip settings silences this rule.
+const SUBSCRIBE_FAIL_BYTES = 79
+const SUBSCRIBE_REFERER = /\/subscribe\/?(?:[?#]|$)/
 const ANON_ADMIN = /^\/wp-admin\/(?:admin-ajax|admin-post|load-styles|load-scripts|install|setup-config)\.php$|^\/wp-admin\/(?:css|js|images|fonts)\//i
 
 // Read new bytes since last offset, advancing state. Handles rotation (file
@@ -176,6 +187,7 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
   const adminOkIps = new Set<string>() // ip that then loaded an authed wp-admin page (2xx)
   const xmlrpcByIp = new Map<string, number>() // ip → POST xmlrpc count
   const webshell = new Map<string, { ip: string; count: number }>() // pathNoQuery → sample
+  const subscribeFail = new Map<string, number>() // ip → "Security check failed" replies
   let total = 0
 
   for (const line of lines) {
@@ -225,6 +237,10 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
     // every WP site is probed constantly for my.php / academy.php / etc., and
     // those hits 404 (not there) or 403 (WAF-blocked). Alerting on the probes
     // is pure noise; alert only when the shell actually RAN.
+    if (e.method === "POST" && pathNoQuery === "/wp-admin/admin-ajax.php" && e.bytes === SUBSCRIBE_FAIL_BYTES && SUBSCRIBE_REFERER.test(e.referer)) {
+      subscribeFail.set(e.ip, (subscribeFail.get(e.ip) || 0) + 1)
+      noteHost(e.ip, e.host)
+    }
     const executed = e.status >= 200 && e.status < 300
     const isUploadsPhp = UPLOADS_PHP.test(pathNoQuery)
     const isPluginShell = PLUGIN_PHP.test(pathNoQuery) && (SUSPICIOUS_QUERY.test(query) || BASE64_BLOB.test(query))
@@ -278,6 +294,15 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
     }
   }
 
+  for (const [ip, count] of subscribeFail) {
+    findings.push({
+      rule: "subscribe-nonce-fail", key: `subscribe-nonce:${ip}`, severity: "warning", ip,
+      path: "/wp-admin/admin-ajax.php",
+      title: "Subscribe form rejected a visitor",
+      detail: `${ip}: "Security check failed" on /subscribe/ (${count}×)${onSites(ip)}, a real signup was turned away`,
+    })
+  }
+
   const counts = {
     total,
     batchV1: [...batchIps.values()].reduce((a, b) => a + b, 0),
@@ -285,6 +310,7 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
     batchBlocked,
     xmlrpcPosts: [...xmlrpcByIp.values()].reduce((a, b) => a + b, 0),
     webshellHits: [...webshell.values()].reduce((a, b) => a + b.count, 0),
+    subscribeFail: [...subscribeFail.values()].reduce((a, b) => a + b, 0),
     loginSuccess: st?.hideLogin ? 0 : [...loginOkIps].filter((ip) => adminOkIps.has(ip)).length,
     loginRedirectsAlways: !!st?.hideLogin,
   }
@@ -339,7 +365,7 @@ export function createLogWatchPlugin() {
   return createMonitoringPlugin(
     "logwatch",
     "logwatch",
-    "Access-log security watcher (WP2Shell / webshell / xmlrpc)",
+    "Access-log security watcher (WP2Shell / webshell / xmlrpc / subscribe form)",
     async () => {},
     monitorFn,
     refreshFn,
