@@ -40,8 +40,11 @@ function collectDisks(): Disk[] {
     try {
         const darwin = platform() === "darwin"
         // Linux: `-T` gives the fstype column; bytes via --block-size=1.
-        // macOS: no fstype flag, `-l` restricts to local filesystems.
-        const cmd = darwin ? "df -kl" : "df -PT --block-size=1"
+        // `-l` on both: local filesystems only, which is all this reports, and
+        // df skips network mounts without touching them. Without it a dead NFS
+        // server hung every call past the timeout, so the Patroni nodes
+        // reported no disks at all for seven weeks.
+        const cmd = darwin ? "df -kl" : "df -lPT --block-size=1"
         const out = execSync(cmd, { encoding: "utf8", timeout: 5000 })
         const raw: Disk[] = []
         for (const line of out.split("\n").slice(1)) {
