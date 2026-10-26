@@ -231,6 +231,48 @@ async function collectSite(site: WpSite): Promise<any> {
     out.cronError = String(e?.stderr || e?.message || e).slice(0, 160)
   }
 
+  // 6. Plugins: how many are active, which sit inactive (code on disk that
+  // nobody uses, still reachable by a request), and which have an update
+  // waiting. The update flags come from WordPress's own cached check.
+  try {
+    const raw = await wp(site, ["plugin", "list", "--fields=name,status,update,version", "--format=json"])
+    const list = parseJsonSafe<any[]>(raw, []).filter((p) => p.status === "active" || p.status === "active-network" || p.status === "inactive")
+    out.plugins = {
+      active: list.filter((p) => p.status !== "inactive").length,
+      inactive: list.filter((p) => p.status === "inactive").map((p) => String(p.name)),
+      updates: list.filter((p) => p.update === "available").map((p) => String(p.name)),
+    }
+  } catch (e: any) {
+    out.pluginsError = String(e?.message || e).slice(0, 160)
+  }
+
+  // 7. Themes with an update waiting, from the same cached check.
+  try {
+    const raw = await wp(site, ["theme", "list", "--fields=name,update", "--format=json"])
+    out.themeUpdates = parseJsonSafe<any[]>(raw, []).filter((t) => t.update === "available").map((t) => String(t.name))
+  } catch (e: any) {
+    out.themesError = String(e?.message || e).slice(0, 160)
+  }
+
+  // 8. A core release newer than the one installed (asks api.wordpress.org;
+  // an empty list is up to date).
+  try {
+    const raw = await wp(site, ["core", "check-update", "--format=json"], 30000)
+    const ups = parseJsonSafe<any[]>(raw, [])
+    out.coreUpdate = ups.length ? String(ups[0].version) : null
+  } catch (e: any) {
+    out.coreUpdateError = String(e?.message || e).slice(0, 160)
+  }
+
+  // 9. The PHP that WP-CLI, and so the site, runs on. `wp cli info` doesn't
+  // load WordPress.
+  try {
+    const info = parseJsonSafe<any>(await wp(site, ["cli", "info", "--format=json"]), {})
+    if (info.php_version) out.phpVersion = String(info.php_version)
+  } catch (e: any) {
+    out.phpVersionError = String(e?.message || e).slice(0, 160)
+  }
+
   return out
 }
 
