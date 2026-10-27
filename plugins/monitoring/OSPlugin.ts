@@ -5,12 +5,13 @@ import {
 } from "os"
 import { readFileSync } from "fs"
 import { execSync } from "child_process"
-import { parseProcesses, PS_CMD, type ProcInfo } from "../../lib/processes.js"
+import { parseProcesses, PS_CMD, sampleProcesses, type ProcInfo } from "../../lib/processes.js"
 
 // Named service processes (nginx / php-fpm / db / …) running on the host.
+// From /proc on Linux, cpu over the time since the last report; ps elsewhere.
 function collectProcesses(): ProcInfo[] {
     try {
-        return parseProcesses(execSync(PS_CMD, { encoding: "utf8", timeout: 5000 }))
+        return sampleProcesses() ?? parseProcesses(execSync(PS_CMD, { encoding: "utf8", timeout: 5000 }))
     } catch {
         return []
     }
