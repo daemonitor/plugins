@@ -108,15 +108,16 @@ const BASE64_BLOB = /[A-Za-z0-9+/]{40,}={0,2}/
 const UPLOADS_PHP = /\/wp-content\/uploads\/.*\.php$/i
 const PLUGIN_PHP = /\/wp-content\/(?:plugins|mu-plugins)\/.*\.php$/i
 const BATCH_PATH = /^\/wp-json\/batch\/v1|rest_route=\/?batch\/v1/i
+// The omnisend-integration mu-plugin's wp_send_json_error "Security check
+// failed" logs as 79 bytes direct from Cloudflare and 90 through cloudflared
+// (since 2026-10-28); success logs as 77 and 88. Matching on size is the only
+// signal the access log carries, so a change to that message, to nginx's gzip
+// settings or to the proxy in front silences this rule.
+const SUBSCRIBE_FAIL_BYTES = new Set([79, 90])
+const SUBSCRIBE_REFERER = /\/subscribe\/?(?:[?#]|$)/
 // wp-admin paths that answer 2xx to anonymous callers, so a 2xx on them proves
 // nothing about being logged in. Everything else under /wp-admin/ redirects a
 // logged-out visitor to the login form.
-// The omnisend-integration mu-plugin's wp_send_json_error "Security check
-// failed" gzips to exactly 79 bytes; success gzips to 77. Matching on size is
-// the only signal the access log carries, so a change to that message or to
-// nginx's gzip settings silences this rule.
-const SUBSCRIBE_FAIL_BYTES = 79
-const SUBSCRIBE_REFERER = /\/subscribe\/?(?:[?#]|$)/
 const ANON_ADMIN = /^\/wp-admin\/(?:admin-ajax|admin-post|load-styles|load-scripts|install|setup-config)\.php$|^\/wp-admin\/(?:css|js|images|fonts)\//i
 
 // Read new bytes since last offset, advancing state. Handles rotation (file
@@ -237,7 +238,7 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
     // every WP site is probed constantly for my.php / academy.php / etc., and
     // those hits 404 (not there) or 403 (WAF-blocked). Alerting on the probes
     // is pure noise; alert only when the shell actually RAN.
-    if (e.method === "POST" && pathNoQuery === "/wp-admin/admin-ajax.php" && e.bytes === SUBSCRIBE_FAIL_BYTES && SUBSCRIBE_REFERER.test(e.referer)) {
+    if (e.method === "POST" && pathNoQuery === "/wp-admin/admin-ajax.php" && SUBSCRIBE_FAIL_BYTES.has(e.bytes) && SUBSCRIBE_REFERER.test(e.referer)) {
       subscribeFail.set(e.ip, (subscribeFail.get(e.ip) || 0) + 1)
       noteHost(e.ip, e.host)
     }
