@@ -10,8 +10,8 @@ import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/Monitori
 //   • webshell exec: a .php under wp-content/uploads (never legit) or a plugin
 //                    dir invoked with a command-style/base64 query
 //   • xmlrpc brute:  a burst of POST /xmlrpc.php from one IP
-//   • subscribe fail: archpaper's /subscribe/ form answered "Security check
-//                    failed" (stale nonce in the page cache, 2026-10-23)
+//   • custom rules:  per-source `rules` from the client config, for anything a
+//                    log line can identify that is specific to one site
 //
 // It works identically for Cloudflare-fronted and direct-origin sites (it reads
 // the log at the origin), so it covers the "Mixed" fleet with one mechanism. The
@@ -24,9 +24,23 @@ import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/Monitori
 // nginx real_ip (set_real_ip_from + CF-Connecting-IP) so $remote_addr is the
 // visitor, not the CF edge — otherwise every finding points at a Cloudflare IP.
 
+// Counts matching requests per IP and raises one finding per IP. Every field
+// that is set must match; `referer` is a regular expression.
+interface LogRule {
+  name: string
+  title?: string
+  severity?: "warning" | "error"
+  method?: string
+  path?: string // exact request path, without the query
+  status?: number[]
+  bytes?: number[] // body bytes as logged, which depends on gzip and on any proxy in front
+  referer?: string
+}
+
 interface LogSource {
   name?: string
   path: string // absolute path to the access log
+  rules?: LogRule[]
   // Start reading from the beginning on first sight (replays history — off by
   // default so we don't alert on old lines or load a huge file).
   fromStart?: boolean
@@ -39,6 +53,7 @@ interface LogWatchConfig {
   fromStart?: boolean
   refreshInterval?: number // tail cadence (default 60s)
   xmlrpcBurstThreshold?: number // POST /xmlrpc.php per IP per window to alert (default 20)
+  rules?: LogRule[] // single-source shorthand
 }
 
 interface SourceState {
@@ -108,13 +123,6 @@ const BASE64_BLOB = /[A-Za-z0-9+/]{40,}={0,2}/
 const UPLOADS_PHP = /\/wp-content\/uploads\/.*\.php$/i
 const PLUGIN_PHP = /\/wp-content\/(?:plugins|mu-plugins)\/.*\.php$/i
 const BATCH_PATH = /^\/wp-json\/batch\/v1|rest_route=\/?batch\/v1/i
-// The omnisend-integration mu-plugin's wp_send_json_error "Security check
-// failed" logs as 79 bytes direct from Cloudflare and 90 through cloudflared
-// (since 2026-10-28); success logs as 77 and 88. Matching on size is the only
-// signal the access log carries, so a change to that message, to nginx's gzip
-// settings or to the proxy in front silences this rule.
-const SUBSCRIBE_FAIL_BYTES = new Set([79, 90])
-const SUBSCRIBE_REFERER = /\/subscribe\/?(?:[?#]|$)/
 // wp-admin paths that answer 2xx to anonymous callers, so a 2xx on them proves
 // nothing about being logged in. Everything else under /wp-admin/ redirects a
 // logged-out visitor to the login form.
@@ -160,7 +168,7 @@ async function readNew(source: LogSource, st: SourceState): Promise<string[]> {
   return lines
 }
 
-export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number, st?: SourceState): { findings: any[]; counts: any } {
+export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number, st?: SourceState, rules: LogRule[] = []): { findings: any[]; counts: any } {
   const burstThreshold = cfg.xmlrpcBurstThreshold ?? 20
   const batchIps = new Map<string, number>() // ip → count of batch/v1 → 207
   // key (ip, or path for webshells) → the vhosts it was seen against. Only
@@ -188,7 +196,7 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
   const adminOkIps = new Set<string>() // ip that then loaded an authed wp-admin page (2xx)
   const xmlrpcByIp = new Map<string, number>() // ip → POST xmlrpc count
   const webshell = new Map<string, { ip: string; count: number }>() // pathNoQuery → sample
-  const subscribeFail = new Map<string, number>() // ip → "Security check failed" replies
+  const compiled = rules.map((rule) => ({ rule, referer: rule.referer ? new RegExp(rule.referer) : null, hits: new Map<string, number>() }))
   let total = 0
 
   for (const line of lines) {
@@ -238,8 +246,13 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
     // every WP site is probed constantly for my.php / academy.php / etc., and
     // those hits 404 (not there) or 403 (WAF-blocked). Alerting on the probes
     // is pure noise; alert only when the shell actually RAN.
-    if (e.method === "POST" && pathNoQuery === "/wp-admin/admin-ajax.php" && SUBSCRIBE_FAIL_BYTES.has(e.bytes) && SUBSCRIBE_REFERER.test(e.referer)) {
-      subscribeFail.set(e.ip, (subscribeFail.get(e.ip) || 0) + 1)
+    for (const { rule, referer, hits } of compiled) {
+      if (rule.method && rule.method !== e.method) continue
+      if (rule.path && rule.path !== pathNoQuery) continue
+      if (rule.status && !rule.status.includes(e.status)) continue
+      if (rule.bytes && !rule.bytes.includes(e.bytes)) continue
+      if (referer && !referer.test(e.referer)) continue
+      hits.set(e.ip, (hits.get(e.ip) || 0) + 1)
       noteHost(e.ip, e.host)
     }
     const executed = e.status >= 200 && e.status < 300
@@ -295,13 +308,16 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
     }
   }
 
-  for (const [ip, count] of subscribeFail) {
-    findings.push({
-      rule: "subscribe-nonce-fail", key: `subscribe-nonce:${ip}`, severity: "warning", ip,
-      path: "/wp-admin/admin-ajax.php",
-      title: "Subscribe form rejected a visitor",
-      detail: `${ip}: "Security check failed" on /subscribe/ (${count}×)${onSites(ip)}, a real signup was turned away`,
-    })
+  for (const { rule, hits } of compiled) {
+    for (const [ip, count] of hits) {
+      const title = rule.title || rule.name
+      findings.push({
+        rule: rule.name, key: `rule:${rule.name}:${ip}`, severity: rule.severity || "warning", ip,
+        path: rule.path,
+        title,
+        detail: `${ip}: ${title} (${count}×)${onSites(ip)}`,
+      })
+    }
   }
 
   const counts = {
@@ -311,7 +327,7 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
     batchBlocked,
     xmlrpcPosts: [...xmlrpcByIp.values()].reduce((a, b) => a + b, 0),
     webshellHits: [...webshell.values()].reduce((a, b) => a + b.count, 0),
-    subscribeFail: [...subscribeFail.values()].reduce((a, b) => a + b, 0),
+    ruleHits: compiled.reduce((n, { hits }) => n + [...hits.values()].reduce((a, b) => a + b, 0), 0),
     loginSuccess: st?.hideLogin ? 0 : [...loginOkIps].filter((ip) => adminOkIps.has(ip)).length,
     loginRedirectsAlways: !!st?.hideLogin,
   }
@@ -329,7 +345,7 @@ export function createLogWatchPlugin() {
   const sourcesOf = (plugin: MonitoringPluginBase): LogSource[] => {
     const cfg = (plugin.config || {}) as LogWatchConfig
     if (Array.isArray(cfg.sources) && cfg.sources.length) return cfg.sources
-    if (cfg.path) return [{ name: cfg.name, path: cfg.path, fromStart: cfg.fromStart }]
+    if (cfg.path) return [{ name: cfg.name, path: cfg.path, fromStart: cfg.fromStart, rules: cfg.rules }]
     return []
   }
 
@@ -344,7 +360,7 @@ export function createLogWatchPlugin() {
       if (!st) { st = { offset: 0, remainder: "", inited: false }; states.set(source.path, st) }
       try {
         const lines = await readNew(source, st)
-        const { findings, counts } = analyze(lines, cfg, windowSec, st)
+        const { findings, counts } = analyze(lines, cfg, windowSec, st, source.rules)
         await plugin.send({ name: label, source: label, path: source.path, window: windowSec, counts, findings }, uid)
       } catch (e: any) {
         await plugin.send({ name: label, source: label, path: source.path, error: String(e?.message || e).slice(0, 160), findings: [] }, uid)
@@ -366,7 +382,7 @@ export function createLogWatchPlugin() {
   return createMonitoringPlugin(
     "logwatch",
     "logwatch",
-    "Access-log security watcher (WP2Shell / webshell / xmlrpc / subscribe form)",
+    "Access-log security watcher (WP2Shell / webshell / xmlrpc / custom rules)",
     async () => {},
     monitorFn,
     refreshFn,
