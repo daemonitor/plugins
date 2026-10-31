@@ -11,7 +11,9 @@ import { getJson, googleAccessToken, shiftDate, todayIn } from "./AdsensePlugin.
 // property asks the Data API for: active users right now (realtime), users,
 // sessions and page views for today, yesterday and the last 7 days, and 30
 // days of daily figures. 7-day users come from GA itself, never from summing
-// days: one person on three days is one user, not three.
+// days: one person on three days is one user, not three. Each property also
+// says which sites it covers (its web streams) and its most viewed pages, so a
+// site in daemonitor can show only its own.
 //
 // The report carries its own 30-day history, so the server stores no history
 // rows for this type. Hiding properties and nicknames live in the portal.
@@ -34,6 +36,8 @@ interface Ga4Config {
    * sees nothing but this customer's accounts.
    */
   accounts?: string[]
+  /** Paths never to list among a property's top pages, on top of EXCLUDE_REGEX: a post pulled by request. */
+  excludePages?: string[]
   refreshInterval?: number
   timeout?: number
 }
@@ -61,9 +65,10 @@ const totals = (row: any): Ga4Totals =>
  * batchRunReports response -> the figures the portal shows.
  * Report 0: no dimensions, three named date ranges (today, yesterday, last7).
  * Report 1: one row per date over the last 30 days.
+ * Reports 2 and 3: the most viewed pages over 30 days and since yesterday.
  */
 export function parseProperty(batch: any, now = new Date()) {
-  const [summary, byDate] = batch?.reports || []
+  const [summary, byDate, popular, trending] = batch?.reports || []
   // A multi-range report adds a "dateRange" dimension holding each range's name.
   const range = (name: string) => totals((summary?.rows || []).find((r: any) => r?.dimensionValues?.[0]?.value === name))
 
@@ -89,13 +94,88 @@ export function parseProperty(batch: any, now = new Date()) {
       sessions: days.map((d) => d.sessions),
       views: days.map((d) => d.views),
     },
+    pages: { popular: parsePages(popular), trending: parsePages(trending) },
   }
 }
 
 /** runRealtimeReport -> users active in the last 30 minutes. No rows means zero. */
 export const parseRealtime = (r: any) => num(r?.rows?.[0]?.metricValues?.[0])
 
-export const BATCH_BODY = {
+// What a list of top pages leaves out: the home page, section fronts (a single
+// path segment) and archives, which outrank every article and say nothing.
+export const EXCLUDE_REGEX = ["^/([^/]+)?/?$", "^/(calendar|category|tag|author)/.*$"]
+// Per host, per list: a property's reports stay small enough to send every poll.
+const PAGES_PER_HOST = 10
+
+/** A runReport request for a date range's most viewed pages. `/a` and `/a/` are one page, so both are excluded. */
+export function pagesRequest(startDate: string, exclude: string[] = []) {
+  const exact = exclude.flatMap((p) => [p.replace(/\/$/, ""), `${p.replace(/\/$/, "")}/`])
+  return {
+    dateRanges: [{ startDate, endDate: "today" }],
+    dimensions: [{ name: "hostName" }, { name: "pagePath" }, { name: "pageTitle" }],
+    metrics: [{ name: "screenPageViews" }],
+    orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
+    limit: 50,
+    dimensionFilter: {
+      notExpression: {
+        orGroup: {
+          expressions: [
+            ...(exact.length ? [{ filter: { fieldName: "pagePath", inListFilter: { values: exact } } }] : []),
+            ...EXCLUDE_REGEX.map((value) => ({ filter: { fieldName: "pagePath", stringFilter: { matchType: "FULL_REGEXP", value } } })),
+          ],
+        },
+      },
+    },
+  }
+}
+
+export interface Ga4Page { host: string; path: string; title: string; views: number }
+
+const bareHost = (h: string) => h.trim().toLowerCase().replace(/^www\./, "")
+
+/**
+ * A pages report -> the most viewed pages per host. `/a` and `/a/` add up, and a
+ * site name most titles end in (" | The Architect's Newspaper") comes off.
+ */
+export function parsePages(report: any): Ga4Page[] {
+  const rows = (report?.rows || []).map((r: any) => ({
+    host: bareHost(String(r?.dimensionValues?.[0]?.value || "")),
+    path: String(r?.dimensionValues?.[1]?.value || "").replace(/(.)\/$/, "$1"),
+    title: String(r?.dimensionValues?.[2]?.value || ""),
+    views: num(r?.metricValues?.[0]),
+  }))
+  const tails = new Map<string, number>()
+  for (const r of rows) {
+    const m = /\s[|–—-]\s[^|–—-]+$/.exec(r.title)
+    if (m) tails.set(m[0], (tails.get(m[0]) ?? 0) + 1)
+  }
+  const [tail, n] = [...tails].sort((a, b) => b[1] - a[1])[0] ?? ["", 0]
+  const shared = n >= 2 && n >= rows.length * 0.6 ? tail : ""
+  const by = new Map<string, Ga4Page>()
+  for (const r of rows) {
+    const key = `${r.host}${r.path}`
+    const had = by.get(key)
+    if (had) had.views += r.views
+    else by.set(key, { ...r, title: shared && r.title.endsWith(shared) ? r.title.slice(0, -shared.length) : r.title })
+  }
+  const counts = new Map<string, number>()
+  return [...by.values()].sort((a, b) => b.views - a.views).filter((p) => {
+    const c = (counts.get(p.host) ?? 0) + 1
+    counts.set(p.host, c)
+    return c <= PAGES_PER_HOST
+  })
+}
+
+/** dataStreams response -> the sites a property covers: each web stream's host, without www. */
+export function parseDomains(r: any): string[] {
+  const uris = (r?.dataStreams || []).map((s: any) => s?.webStreamData?.defaultUri).filter(Boolean)
+  const hosts = uris.flatMap((u: string) => {
+    try { return [bareHost(new URL(u.includes("://") ? u : `https://${u}`).hostname)] } catch { return [] }
+  })
+  return [...new Set<string>(hosts)]
+}
+
+export const batchBody = (exclude: string[] = []) => ({
   requests: [
     {
       dateRanges: [
@@ -111,8 +191,11 @@ export const BATCH_BODY = {
       metrics: METRICS,
       limit: DAYS + 5,
     },
+    // Popular over 30 days, trending since yesterday, as the site's own lists are.
+    pagesRequest("30daysAgo", exclude),
+    pagesRequest("1daysAgo", exclude),
   ],
-}
+})
 
 async function inBatches<T, R>(items: T[], size: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = []
@@ -150,11 +233,12 @@ export function createGa4Plugin() {
       account.properties = await inBatches(account.properties, CONCURRENCY, async (p) => {
         // One property failing (no access to its data, quota) must not hide the rest.
         try {
-          const [batch, realtime] = await Promise.all([
-            post(`${DATA}/properties/${p.id}:batchRunReports`, BATCH_BODY),
+          const [batch, realtime, streams] = await Promise.all([
+            post(`${DATA}/properties/${p.id}:batchRunReports`, batchBody(cfg.excludePages)),
             post(`${DATA}/properties/${p.id}:runRealtimeReport`, { metrics: [{ name: "activeUsers" }] }).catch(() => null),
+            get(`${ADMIN}/properties/${p.id}/dataStreams?pageSize=50`).catch(() => null),
           ])
-          return { ...p, ...parseProperty(batch), activeNow: realtime ? parseRealtime(realtime) : null }
+          return { ...p, ...parseProperty(batch), activeNow: realtime ? parseRealtime(realtime) : null, domains: parseDomains(streams) }
         } catch (e: any) {
           return { ...p, error: String(e?.message || e).slice(0, 160) }
         }
