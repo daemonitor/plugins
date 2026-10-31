@@ -5,18 +5,18 @@ import { parseAccounts, parseDomains, parsePages, parseProperty, parseRealtime, 
 // Account tree: ids lose their prefixes; sub-properties and roll-ups are skipped.
 const accounts = parseAccounts([
   {
-    account: "accounts/842890",
-    displayName: "AN MEDIA GROUP",
+    account: "accounts/1001",
+    displayName: "Example Media",
     propertySummaries: [
-      { property: "properties/273200641", displayName: "AN - GA4", propertyType: "PROPERTY_TYPE_ORDINARY" },
+      { property: "properties/2001", displayName: "Main site", propertyType: "PROPERTY_TYPE_ORDINARY" },
       { property: "properties/1", displayName: "Roll-up", propertyType: "PROPERTY_TYPE_ROLLUP" },
-      { property: "properties/368492268", displayName: "AN INTERIOR - GA4" },
+      { property: "properties/2002", displayName: "Second site" },
     ],
   },
-  { account: "accounts/117318363", displayName: "HERETIC NYC" },
+  { account: "accounts/1002", displayName: "Other Account" },
 ])
-assert.deepEqual(accounts[0].properties.map((p) => p.id), ["273200641", "368492268"])
-assert.equal(accounts[0].id, "842890")
+assert.deepEqual(accounts[0].properties.map((p) => p.id), ["2001", "2002"])
+assert.equal(accounts[0].id, "1001")
 assert.deepEqual(accounts[1].properties, [])
 
 // Two reports: named ranges, then by date. Dates come back unordered and gappy.
@@ -58,11 +58,11 @@ assert.ok(BATCH_BODY.requests.length <= 5 && BATCH_BODY.requests.every((r) => r.
 
 // A property's sites are its web streams' hosts, whatever form the URI takes.
 assert.deepEqual(parseDomains({ dataStreams: [
-  { webStreamData: { defaultUri: "https://www.archpaper.com" } },
-  { webStreamData: { defaultUri: "buzz.archpaper.com" } },
-  { webStreamData: { defaultUri: "https://archpaper.com/" } },
+  { webStreamData: { defaultUri: "https://www.example.com" } },
+  { webStreamData: { defaultUri: "news.example.com" } },
+  { webStreamData: { defaultUri: "https://example.com/" } },
   { type: "IOS_APP_DATA_STREAM" },
-] }), ["archpaper.com", "buzz.archpaper.com"])
+] }), ["example.com", "news.example.com"])
 assert.deepEqual(parseDomains(null), [])
 
 // Top pages: /a and /a/ add up, a shared site name comes off the titles, www doesn't split a host.

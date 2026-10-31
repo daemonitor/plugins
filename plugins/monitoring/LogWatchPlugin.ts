@@ -3,7 +3,7 @@ import * as path from "node:path"
 import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // Access-log watcher. Tails nginx/apache access logs on the WP host and applies
-// the log-class detection rules from the Archpaper handoff — the ones that are
+// log-class detection rules — the ones that are
 // invisible to a poll-based snapshot because they live in the per-request stream:
 //   • WP2Shell:      POST /wp-json/batch/v1 (or ?rest_route=/batch/v1) → 207
 //   • correlation:   batch/v1 exploit followed by a REAL admin login (see below)
@@ -108,7 +108,7 @@ function parseLine(line: string): Entry | null {
   const ips = tokens.filter((t) => IP_TOKEN.test(t))
   const ip = ips.length ? ips[ips.length - 1] : (tokens[0] || "")
   // A host in the leading field is what lets a SHARED access log (one file for
-  // every vhost, as on the misc box) still say WHICH site was hit. A plain
+  // every vhost) still say WHICH site was hit. A plain
   // combined line leads with the client IP instead, so only a non-IP first
   // token counts. When $host is itself an IP — a request made straight to the
   // origin address — there is no site name to report and "" is correct.
@@ -271,7 +271,7 @@ export function analyze(lines: string[], cfg: LogWatchConfig, windowSec: number,
   // batch/v1 finding so it leads.
   // Only call it a takeover when the login status is trustworthy for this site
   // AND the IP went on to load an admin screen successfully. Either half alone
-  // produced a false "account takeover" page on archpaper.com, 2026-08-23.
+  // would page a false "account takeover".
   const authed = (ip: string) => !st?.hideLogin && loginOkIps.has(ip) && adminOkIps.has(ip)
   for (const [ip, count] of batchIps) {
     if (authed(ip)) {

@@ -30,7 +30,7 @@ interface Ga4Config {
   clientSecret?: string
   refreshToken?: string
   /**
-   * GA account ids to collect, e.g. ["842890"]. A Google login often sees more
+   * GA account ids to collect, e.g. ["123456"]. A Google login often sees more
    * accounts than belong to the customer whose agent this is, and everything
    * collected lands in that customer's view. Leave unset only when the login
    * sees nothing but this customer's accounts.
@@ -135,7 +135,7 @@ const bareHost = (h: string) => h.trim().toLowerCase().replace(/^www\./, "")
 
 /**
  * A pages report -> the most viewed pages per host. `/a` and `/a/` add up, and a
- * site name most titles end in (" | The Architect's Newspaper") comes off.
+ * site name most titles end in (" | Example Site") comes off.
  */
 export function parsePages(report: any): Ga4Page[] {
   const rows = (report?.rows || []).map((r: any) => ({

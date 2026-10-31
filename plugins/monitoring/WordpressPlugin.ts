@@ -5,7 +5,7 @@ import * as path from "node:path"
 import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
 
 // WordPress security-posture plugin. Runs on the WP host (where the daemonitor
-// client already runs) and polls the state that the Archpaper intrusions moved
+// client already runs) and polls the state that WordPress intrusions tend to move
 // through: admin accounts, page statuses, must-use plugins, and the web user's
 // crontab. It emits raw observations only — severity and the new-admin /
 // admin-demotion DIFFS are decided server-side in the ingest handler
@@ -54,11 +54,11 @@ interface WpConfig {
   refreshInterval?: number
 }
 
-// Service-account naming patterns seen in the Archpaper intrusions. Any admin
+// Service-account naming patterns common in WordPress intrusions. Any admin
 // whose login/email contains one of these (case-insensitive substring) is
 // flagged for escalation even before the new-admin diff fires.
 const DEFAULT_SERVICE_PATTERNS = [
-  "wpsvc", "wpengine", "bot", "svc", "researchlabs", "wordpress-svc",
+  "wpsvc", "wpengine", "bot", "svc", "wordpress-svc",
 ]
 
 const DEFAULT_CRITICAL_PAGES = ["login", "home", "index", "front-page"]

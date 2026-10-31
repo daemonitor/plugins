@@ -50,8 +50,8 @@ export function reportStart(today: string): string {
 
 export function reportUrl(account: string, start: string, end: string, bySite = false): string {
   const q = new URLSearchParams({ dateRange: "CUSTOM", reportingTimeZone: "ACCOUNT_TIME_ZONE", dimensions: "DATE" })
-  // DOMAIN_NAME, not OWNED_SITE_DOMAIN_NAME: the owned-site rows nest (archpaper.com
-  // contains www.archpaper.com and jobs.archpaper.com), so they double count.
+  // DOMAIN_NAME, not OWNED_SITE_DOMAIN_NAME: the owned-site rows nest (example.com
+  // contains www.example.com and jobs.example.com), so they double count.
   if (bySite) q.append("dimensions", "DOMAIN_NAME")
   for (const [k, v] of [["startDate", start], ["endDate", end]]) {
     const [y, m, d] = v.split("-").map(Number)
@@ -207,7 +207,7 @@ export function createAdsensePlugin() {
       sites = summarizeSites(parseSiteReport(await getJson(reportUrl(account.name, start, today, true), auth, timeout)), today)
     } catch { /* totals only */ }
     return {
-      // The account's own name ("The Architect's Newspaper") labels the service.
+      // The account's own name labels the service.
       // It overrides the plugin's instance name, which only says "AdSense".
       ...(account.displayName ? { name: account.displayName } : {}),
       accountId: account.name,

@@ -2,7 +2,7 @@
 // Logs in, saves the read-only status responses to a JSON file, logs out.
 // The password is read without echo and never written anywhere.
 //
-//   node scripts/probe-tplink-es.mjs 192.168.8.2 <output.json>
+//   node scripts/probe-tplink-es.mjs <switch-ip> <output.json>
 import { createHash } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
