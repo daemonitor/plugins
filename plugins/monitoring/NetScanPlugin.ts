@@ -20,6 +20,9 @@ interface NetDevice {
   mac?: string
   // Latency over this many ms → warning (default 200). Down is always error.
   warnMs?: number
+  // When ping fails, accept a fresh ARP answer as "up" (default true). Turn
+  // off for a device on another subnet, where ARP can't see it anyway.
+  arp?: boolean
 }
 
 interface NetScanConfig {
@@ -55,6 +58,52 @@ async function pingHost(ip: string, count: number, timeout: number): Promise<{ u
   }
 }
 
+/**
+ * Read one neighbour-table entry from `ip -j neigh show <ip>` output.
+ * REACHABLE means the device answered ARP within the last few seconds.
+ */
+export function neighState(json: string): { state: string; mac?: string } | null {
+  try {
+    const e = JSON.parse(json)?.[0]
+    if (!e) return null
+    const state = Array.isArray(e.state) ? e.state[0] : String(e.state || "")
+    return { state, ...(e.lladdr ? { mac: String(e.lladdr) } : {}) }
+  } catch {
+    return null
+  }
+}
+
+let ipMissing = false
+
+/**
+ * Is the device on the wire even though it ignored ping? The failed ping still
+ * made the kernel ARP for it, and a device that drops ICMP almost always
+ * answers ARP, leaving a REACHABLE neighbour entry. DELAY and PROBE mean the
+ * kernel is still checking a stale entry, so look again after it has had time.
+ * Linux only, and needs the `ip` command (iproute2); anything else says no.
+ */
+export async function arpReachable(ip: string): Promise<{ mac?: string } | null> {
+  if (process.platform !== "linux" || ipMissing) return null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let stdout: string
+    try {
+      ;({ stdout } = await pexec("ip", ["-j", "neigh", "show", ip], { timeout: 3000 }))
+    } catch (e: any) {
+      if (e?.code === "ENOENT") {
+        ipMissing = true
+        console.warn("netscan: `ip` (iproute2) is not installed, so devices that ignore ping can't be confirmed by ARP")
+      }
+      return null
+    }
+    const n = neighState(stdout)
+    if (!n) return null
+    if (n.state === "REACHABLE") return { mac: n.mac }
+    if (n.state !== "DELAY" && n.state !== "PROBE") return null
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+  return null
+}
+
 export function createNetScanPlugin() {
   let refreshTimer: any = null
 
@@ -72,14 +121,19 @@ export function createNetScanPlugin() {
     // refresh interval.
     await Promise.all(
       devices.map(async (d) => {
-        const r = await pingHost(d.ip, count, timeout)
+        const r: { up: boolean; latency?: number; loss?: number; via?: string; mac?: string } = await pingHost(d.ip, count, timeout)
+        if (!r.up && d.arp !== false) {
+          const arp = await arpReachable(d.ip)
+          if (arp) Object.assign(r, { up: true, via: "arp", ...(arp.mac ? { mac: arp.mac } : {}) })
+        }
         await plugin.send(
           {
             name: d.name,
             ip: d.ip,
             type: d.type || "host",
-            mac: d.mac,
+            mac: d.mac || r.mac,
             up: r.up,
+            ...(r.via ? { via: r.via } : {}),
             latency: r.latency,
             loss: r.loss,
             warnMs: d.warnMs ?? 200,
