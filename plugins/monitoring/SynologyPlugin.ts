@@ -210,7 +210,7 @@ export function createSynologyPlugin() {
     refreshTimer = null
   }
 
-  return createMonitoringPlugin(
+  const plugin = createMonitoringPlugin(
     "synology",
     "snmp",
     "Synology NAS disks, pools and volumes through the DSM web API",
@@ -219,6 +219,10 @@ export function createSynologyPlugin() {
     refreshFn,
     teardownFn,
   )
+  // `name` is the x-type sent to the server, and PluginManager picks plugins from
+  // the config list by getName(). Without this, listing "synology" runs nothing.
+  plugin.getName = () => "synology"
+  return plugin
 }
 
 export default createSynologyPlugin

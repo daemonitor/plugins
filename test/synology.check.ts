@@ -1,6 +1,11 @@
 // Run: bun test/synology.check.ts
 import assert from "node:assert/strict"
-import { authErrorText, summarise } from "../plugins/monitoring/SynologyPlugin.ts"
+import { authErrorText, createSynologyPlugin, summarise } from "../plugins/monitoring/SynologyPlugin.ts"
+
+// The config list selects by getName(), and the server types the report by name.
+const plugin = createSynologyPlugin()
+assert.equal(plugin.getName(), "synology")
+assert.equal(plugin.name, "snmp")
 
 // Shapes as a DS420j on DSM 7.4 answers them.
 const disk = (name: string, over = {}) => ({ name, device: "/dev/sda", model: "WD101EFBX", temp: 32, status: "normal", smart_status: "normal", unc: 0, ...over })
