@@ -8,6 +8,7 @@ import { createWordpressPlugin } from "./monitoring/WordpressPlugin.js"
 import { createLogWatchPlugin } from "./monitoring/LogWatchPlugin.js"
 import { createNetScanPlugin } from "./monitoring/NetScanPlugin.js"
 import { createSnmpPlugin } from "./monitoring/SnmpPlugin.js"
+import { createSynologyPlugin } from "./monitoring/SynologyPlugin.js"
 import { createThreeCXPlugin } from "./monitoring/ThreeCXPlugin.js"
 import { createTplinkPlugin } from "./monitoring/TplinkPlugin.js"
 import { createPatroniPlugin } from "./monitoring/PatroniPlugin.js"
@@ -38,6 +39,7 @@ export default {
     Logwatch: createLogWatchPlugin,
     Netscan: createNetScanPlugin,
     Snmp: createSnmpPlugin,
+    Synology: createSynologyPlugin,
     ThreeCX: createThreeCXPlugin,
     Tplink: createTplinkPlugin,
     Patroni: createPatroniPlugin,
