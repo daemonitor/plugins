@@ -110,6 +110,14 @@ function parseJsonSafe<T>(s: string, fallback: T): T {
   }
 }
 
+// WP-CLI prints user_registered as UTC with no zone marker.
+export function registrationCounts(registered: unknown[], now = Date.now()) {
+  const day = 86_400_000
+  const times = registered.map((r) => Date.parse(`${String(r).replace(" ", "T")}Z`)).filter(Number.isFinite)
+  const since = (days: number) => times.filter((t) => t >= now - days * day).length
+  return { users: registered.length, signups: { d1: since(1), d7: since(7), d30: since(30) } }
+}
+
 async function collectSite(site: WpSite): Promise<any> {
   const label = site.name || path.basename(site.path || "") || "wordpress"
   const servicePatterns = (site.servicePatterns || DEFAULT_SERVICE_PATTERNS).map((s) => s.toLowerCase())
@@ -133,6 +141,14 @@ async function collectSite(site: WpSite): Promise<any> {
       .map((a) => ({ login: a.login, email: a.email, reason: "service-account naming pattern" }))
   } catch (e: any) {
     out.adminsError = String(e?.message || e).slice(0, 160)
+  }
+
+  // Registrations, for the activity view. Counts only: nothing here names anyone.
+  try {
+    const raw = await wp(site, ["user", "list", "--fields=user_registered", "--format=json"], 30000)
+    out.activity = registrationCounts(parseJsonSafe<any[]>(raw, []).map((u) => u.user_registered))
+  } catch (e: any) {
+    out.activityError = String(e?.message || e).slice(0, 160)
   }
 
   // 2. WP core version (posture; latest-version comparison is done elsewhere).

@@ -11,6 +11,7 @@ import { createSnmpPlugin } from "./monitoring/SnmpPlugin.js"
 import { createThreeCXPlugin } from "./monitoring/ThreeCXPlugin.js"
 import { createTplinkPlugin } from "./monitoring/TplinkPlugin.js"
 import { createPatroniPlugin } from "./monitoring/PatroniPlugin.js"
+import { createAppActivityPlugin } from "./monitoring/AppActivityPlugin.js"
 import { createAdsensePlugin } from "./monitoring/AdsensePlugin.js"
 import { createGa4Plugin } from "./monitoring/Ga4Plugin.js"
 import { createNagiosPlugin } from "./monitoring/NagiosPlugin.js"
@@ -40,6 +41,7 @@ export default {
     ThreeCX: createThreeCXPlugin,
     Tplink: createTplinkPlugin,
     Patroni: createPatroniPlugin,
+    Appactivity: createAppActivityPlugin,
     Adsense: createAdsensePlugin,
     Ga4: createGa4Plugin,
     Nagios: createNagiosPlugin,
