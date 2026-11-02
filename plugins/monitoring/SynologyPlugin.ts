@@ -48,6 +48,20 @@ export const authErrorText = (code: unknown): string | undefined => AUTH_ERRORS[
 const apiErrorText = (api: string, code: unknown) =>
   Number(code) === 105 ? `${api}: this account lacks permission, it may need to be an administrator` : `${api}: DSM error ${code}`
 
+// "SID not found". DSM drops about 1% of sessions it has just opened, on the
+// first call after a successful login. Why isn't known; a new login works.
+const SESSION_LOST = 119
+
+/** Run a whole login-to-logout pass, again if DSM lost the session. Once only. */
+export async function retryLostSession<T>(pass: () => Promise<T>): Promise<T> {
+  try {
+    return await pass()
+  } catch (e: any) {
+    if (e?.dsmCode !== SESSION_LOST) throw e
+    return pass()
+  }
+}
+
 function post(url: string, form: Record<string, string>, cfg: SynologyConfig): Promise<any> {
   return new Promise((resolve, reject) => {
     const body = new URLSearchParams(form).toString()
@@ -148,7 +162,7 @@ export function summarise(storage: any, usb: any, system: any, util: any, cfg: S
 
 async function collect(call: Call, cfg: SynologyConfig) {
   const storage = await call("SYNO.Storage.CGI.Storage", "load_info", 1)
-  if (!storage.success) throw new Error(apiErrorText("storage", storage.error?.code))
+  if (!storage.success) throw Object.assign(new Error(apiErrorText("storage", storage.error?.code)), { dsmCode: storage.error?.code })
   // Extras: the card is still worth drawing without them.
   const [usb, system, util] = await Promise.all([
     call("SYNO.Core.ExternalDevice.Storage.USB", "list", 1, { additional: '["all"]' }).catch(() => null),
@@ -175,26 +189,28 @@ export function createSynologyPlugin() {
       if (!cfg.account || !cfg.password) throw new Error("config needs account and password")
       if (Date.now() < lockedUntil) throw new Error(lockedReason)
 
-      const login = await post(cfg.url!, { api: "SYNO.API.Auth", version: "6", method: "login", account: cfg.account, passwd: cfg.password, format: "sid" }, cfg)
-      if (!login.success) {
-        const code = login.error?.code
-        const refused = authErrorText(code)
-        if (refused) {
-          lockedUntil = Date.now() + REAUTH_AFTER_MS
-          lockedReason = `login refused: ${refused}. Next try within the hour, or restart the agent`
-          throw new Error(lockedReason)
+      await report(await retryLostSession(async () => {
+        const login = await post(cfg.url!, { api: "SYNO.API.Auth", version: "6", method: "login", account: cfg.account!, passwd: cfg.password!, format: "sid" }, cfg)
+        if (!login.success) {
+          const code = login.error?.code
+          const refused = authErrorText(code)
+          if (refused) {
+            lockedUntil = Date.now() + REAUTH_AFTER_MS
+            lockedReason = `login refused: ${refused}. Next try within the hour, or restart the agent`
+            throw new Error(lockedReason)
+          }
+          throw new Error(`login failed: DSM error ${code}`)
         }
-        throw new Error(`login failed: DSM error ${code}`)
-      }
 
-      const sid = String(login.data?.sid)
-      const call: Call = (api, method, version, extra = {}) =>
-        post(cfg.url!, { api, method, version: String(version), _sid: sid, ...extra }, cfg)
-      try {
-        await report(await collect(call, cfg))
-      } finally {
-        await call("SYNO.API.Auth", "logout", 6).catch(() => {})
-      }
+        const sid = String(login.data?.sid)
+        const call: Call = (api, method, version, extra = {}) =>
+          post(cfg.url!, { api, method, version: String(version), _sid: sid, ...extra }, cfg)
+        try {
+          return await collect(call, cfg)
+        } finally {
+          await call("SYNO.API.Auth", "logout", 6).catch(() => {})
+        }
+      }))
     } catch (e: any) {
       await report({ kind: "qnap", reachable: false, error: String(e?.message || e).slice(0, 120) })
     }
