@@ -203,6 +203,19 @@ async function inBatches<T, R>(items: T[], size: number, fn: (t: T) => Promise<R
   return out
 }
 
+/**
+ * One more try after a timeout, so a slow moment doesn't warn for a whole poll.
+ * Only timeouts: a 403 or a quota error will say the same thing again.
+ */
+export async function retryTimeout<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (e: any) {
+    if (e?.name !== "TimeoutError") throw e
+    return fn()
+  }
+}
+
 export function createGa4Plugin() {
   let refreshTimer: any = null
 
@@ -234,7 +247,7 @@ export function createGa4Plugin() {
         // One property failing (no access to its data, quota) must not hide the rest.
         try {
           const [batch, realtime, streams] = await Promise.all([
-            post(`${DATA}/properties/${p.id}:batchRunReports`, batchBody(cfg.excludePages)),
+            retryTimeout(() => post(`${DATA}/properties/${p.id}:batchRunReports`, batchBody(cfg.excludePages))),
             post(`${DATA}/properties/${p.id}:runRealtimeReport`, { metrics: [{ name: "activeUsers" }] }).catch(() => null),
             get(`${ADMIN}/properties/${p.id}/dataStreams?pageSize=50`).catch(() => null),
           ])

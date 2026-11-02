@@ -1,6 +1,6 @@
 // Run: bun test/ga4.check.ts
 import assert from "node:assert/strict"
-import { parseAccounts, parseDomains, parsePages, parseProperty, parseRealtime, batchBody, pagesRequest } from "../plugins/monitoring/Ga4Plugin.ts"
+import { parseAccounts, parseDomains, parsePages, parseProperty, parseRealtime, batchBody, pagesRequest, retryTimeout } from "../plugins/monitoring/Ga4Plugin.ts"
 
 // Account tree: ids lose their prefixes; sub-properties and roll-ups are skipped.
 const accounts = parseAccounts([
@@ -91,5 +91,25 @@ const excluded = exprs.slice(1).map((e) => new RegExp(e.filter.stringFilter.valu
 for (const path of ["/", "/news", "/news/", "/calendar/feed/", "/category/x", "/tag/y", "/author/z/"]) assert.ok(excluded.some((re) => re.test(path)), path)
 for (const path of ["/2026/10/som-bears-stadium-chicago", "/2026/10/x/"]) assert.ok(!excluded.some((re) => re.test(path)), path)
 assert.equal(pagesRequest("1daysAgo").dimensionFilter.notExpression.orGroup.expressions.length, 2)
+
+// A timeout gets one more try; any other failure, and a second timeout, surface.
+const failing = (name: string, succeedOn = Infinity) => {
+  const f: any = async () => {
+    f.calls++
+    if (f.calls < succeedOn) throw Object.assign(new Error(name), { name })
+    return "ok"
+  }
+  f.calls = 0
+  return f
+}
+const slowOnce = failing("TimeoutError", 2)
+assert.equal(await retryTimeout(slowOnce), "ok")
+assert.equal(slowOnce.calls, 2)
+const slow = failing("TimeoutError")
+await assert.rejects(retryTimeout(slow), { name: "TimeoutError" })
+assert.equal(slow.calls, 2)
+const denied = failing("Error")
+await assert.rejects(retryTimeout(denied))
+assert.equal(denied.calls, 1)
 
 console.log("ga4 checks passed")
