@@ -32,7 +32,6 @@
   ],
   "exclude": [
     "node_modules",
-    "nuxt.config.ts",
     "test",
     "scripts",
     "plugins/monitoring/CloudflarePlugin.ts",
