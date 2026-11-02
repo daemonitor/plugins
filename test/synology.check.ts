@@ -1,6 +1,6 @@
 // Run: bun test/synology.check.ts
 import assert from "node:assert/strict"
-import { authErrorText, createSynologyPlugin, summarise } from "../plugins/monitoring/SynologyPlugin.ts"
+import { authErrorText, createSynologyPlugin, retryLostSession, summarise } from "../plugins/monitoring/SynologyPlugin.ts"
 
 // The config list selects by getName(), and the server types the report by name.
 const plugin = createSynologyPlugin()
@@ -55,5 +55,26 @@ assert.equal(summarise(storage(), null, null, null).model, undefined)
 assert.match(authErrorText(400)!, /wrong/)
 assert.match(authErrorText(407)!, /auto block/)
 assert.equal(authErrorText(119), undefined)
+
+// A lost session gets one new login. Nothing else is retried, least of all a refused login.
+const failing = (...codes: unknown[]) => {
+  const pass = async () => {
+    pass.runs++
+    const code = codes.shift()
+    if (code === undefined) return "ok"
+    throw Object.assign(new Error(`DSM error ${code}`), { dsmCode: code })
+  }
+  pass.runs = 0
+  return pass
+}
+const once = failing(119)
+assert.equal(await retryLostSession(once), "ok")
+assert.equal(once.runs, 2)
+const twice = failing(119, 119)
+await assert.rejects(retryLostSession(twice), /119/)
+assert.equal(twice.runs, 2)
+const other = failing(105)
+await assert.rejects(retryLostSession(other), /105/)
+assert.equal(other.runs, 1)
 
 console.log("synology ok")
