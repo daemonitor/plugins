@@ -127,6 +127,33 @@ function availableMem(): number {
     return freemem()
 }
 
+// Swap and page cache, in bytes. Swap in use on a box that still has RAM
+// available is old pages pushed out, not pressure, so the card shows both.
+// Linux reads /proc/meminfo; macOS has swap only (sysctl vm.swapusage).
+function memDetail(): { swapTotal: number; swapUsed: number; cached?: number } | undefined {
+    if (platform() === "linux") {
+        try {
+            const info = readFileSync("/proc/meminfo", "utf8")
+            const kb = (key: string) => parseInt(info.match(new RegExp(`^${key}:\\s+(\\d+)\\s*kB`, "m"))?.[1] || "0", 10) * 1024
+            const swapTotal = kb("SwapTotal")
+            return { swapTotal, swapUsed: swapTotal - kb("SwapFree"), cached: kb("Cached") + kb("Buffers") }
+        } catch {
+            return undefined
+        }
+    }
+    if (platform() === "darwin") {
+        try {
+            // "total = 2048.00M  used = 1024.50M  free = 1023.50M  (encrypted)"
+            const out = execSync("sysctl -n vm.swapusage", { encoding: "utf8", timeout: 4000 })
+            const mb = (key: string) => parseFloat(out.match(new RegExp(`${key} = ([\\d.]+)M`))?.[1] || "0") * 1024 * 1024
+            return { swapTotal: Math.round(mb("total")), swapUsed: Math.round(mb("used")) }
+        } catch {
+            return undefined
+        }
+    }
+    return undefined
+}
+
 // Cumulative rx/tx byte counters summed across real interfaces (Linux
 // /proc/net/dev). Loopback and virtual bridges (docker/veth/lxc/br-) are skipped
 // so the figure reflects actual host network traffic, not container-to-host
@@ -217,6 +244,7 @@ export function createOSPlugin() {
             totalmem: totalmem(),
             freemem: freemem(),
             available: availableMem(),
+            memory: memDetail(),
             disks: collectDisks(),
             processes: collectProcesses(),
             network,
