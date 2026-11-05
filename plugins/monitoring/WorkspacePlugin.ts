@@ -1,0 +1,151 @@
+import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
+import { getJson, googleAccessToken, shiftDate } from "./AdsensePlugin.js"
+
+// Google Workspace pooled storage: used against the domain's shared quota,
+// split by Drive, Gmail and Photos, from the Admin SDK customer usage report.
+//
+// Runs on the same `workspace` config block the cost plugin's workspace
+// provider uses (clientId, clientSecret, refreshToken, customerId), minted by
+// client/etc/google-auth.mjs --source=workspace with the reports scope.
+//
+// Google publishes the report a day or more late, so each poll walks back from
+// yesterday to the newest date that has data. `asOf` says which day it is.
+// A quota change in the Admin console shows here only once a report covers it.
+// The same day's users report lists each account's share, biggest first.
+
+const API = "https://admin.googleapis.com/admin/reports/v1/usage/dates"
+const USERS_API = "https://admin.googleapis.com/admin/reports/v1/usage/users/all/dates"
+const USER_PARAMS = ["used_quota_in_mb", "drive_used_quota_in_mb", "gmail_used_quota_in_mb", "gplus_photos_used_quota_in_mb"]
+const LOOKBACK = 7
+// ponytail: the biggest accounts only, so a large domain's report stays small.
+const MAX_USERS = 200
+
+interface WorkspaceConfig {
+  clientId?: string
+  clientSecret?: string
+  refreshToken?: string
+  customerId?: string
+  warnPct?: number
+  critPct?: number
+  refreshInterval?: number
+  timeout?: number
+}
+
+/** A customer usage report -> MB figures by parameter name. Null when the day has no data yet. */
+export function parseUsage(body: any): Record<string, number> | null {
+  const params: any[] = body?.usageReports?.[0]?.parameters || []
+  const out: Record<string, number> = {}
+  for (const p of params) {
+    const name = String(p?.name || "")
+    if (name.startsWith("accounts:") && p.intValue != null) out[name.slice(9)] = Number(p.intValue)
+  }
+  return out.used_quota_in_mb != null ? out : null
+}
+
+const MB = 1024 * 1024
+
+export interface WorkspaceUser { email: string; bytes: number; drive: number; gmail: number; photos: number }
+
+/** A users usage report page -> each user's storage in bytes. */
+export function parseUsers(body: any): WorkspaceUser[] {
+  return (body?.usageReports || []).flatMap((r: any) => {
+    const email = String(r?.entity?.userEmail || "")
+    if (!email) return []
+    const v: Record<string, number> = {}
+    for (const p of r?.parameters || []) v[String(p?.name || "").replace(/^accounts:/, "")] = Number(p?.intValue) || 0
+    return [{ email, bytes: (v.used_quota_in_mb || 0) * MB, drive: (v.drive_used_quota_in_mb || 0) * MB, gmail: (v.gmail_used_quota_in_mb || 0) * MB, photos: (v.gplus_photos_used_quota_in_mb || 0) * MB }]
+  })
+}
+
+/** MB figures -> what the report carries. A total of 0 or less means Google reports no pooled cap. */
+export function summarize(u: Record<string, number>, asOf: string) {
+  const total = u.total_quota_in_mb > 0 ? u.total_quota_in_mb * MB : null
+  const used = u.used_quota_in_mb * MB
+  return {
+    asOf,
+    usedBytes: used,
+    totalBytes: total,
+    usedPct: total ? Math.round((used / total) * 1000) / 10 : null,
+    breakdown: [
+      { name: "Drive", bytes: (u.drive_used_quota_in_mb || 0) * MB },
+      { name: "Gmail", bytes: (u.gmail_used_quota_in_mb || 0) * MB },
+      { name: "Photos", bytes: (u.gplus_photos_used_quota_in_mb || 0) * MB },
+    ],
+  }
+}
+
+export function createWorkspacePlugin() {
+  let refreshTimer: any = null
+
+  const collect = async (cfg: WorkspaceConfig) => {
+    const timeout = cfg.timeout || 20000
+    const auth = { headers: { Authorization: `Bearer ${await googleAccessToken(cfg, timeout)}` } }
+    const today = new Date().toISOString().slice(0, 10)
+    for (let back = 1; back <= LOOKBACK; back++) {
+      const date = shiftDate(today, -back)
+      // No `parameters` filter: one misspelt name fails the whole call.
+      // A day Google hasn't published is a 400 ("Data for dates later than X is not yet available").
+      const body = await getJson(`${API}/${date}?customerId=${encodeURIComponent(cfg.customerId!)}`, auth, timeout)
+        .catch((e) => { if (/not yet available/i.test(String(e?.message))) return null; throw e })
+      const u = parseUsage(body)
+      if (!u) continue
+      // Per-user storage is extra: if it fails, the domain totals still report.
+      let users: WorkspaceUser[] | undefined
+      try {
+        const all: WorkspaceUser[] = []
+        let page = ""
+        do {
+          const q = new URLSearchParams({
+            customerId: cfg.customerId!, maxResults: "1000",
+            parameters: USER_PARAMS.map((p) => `accounts:${p}`).join(","),
+            ...(page ? { pageToken: page } : {}),
+          })
+          const r = await getJson(`${USERS_API}/${date}?${q}`, auth, timeout)
+          all.push(...parseUsers(r))
+          page = r?.nextPageToken || ""
+        } while (page)
+        users = all.sort((a, b) => b.bytes - a.bytes).slice(0, MAX_USERS)
+      } catch { /* totals only */ }
+      return { name: "Workspace storage", warnPct: cfg.warnPct ?? 85, critPct: cfg.critPct ?? 95, ...summarize(u, date), users }
+    }
+    throw new Error(`no usage report in the last ${LOOKBACK} days`)
+  }
+
+  const refreshFn = async (plugin: MonitoringPluginBase): Promise<void> => {
+    const cfg = (plugin.config || {}) as WorkspaceConfig
+    if (!cfg.clientId || !cfg.clientSecret || !cfg.refreshToken || !cfg.customerId) {
+      await plugin.send({ error: "workspace plugin needs clientId, clientSecret, refreshToken and customerId" })
+      return
+    }
+    try {
+      await plugin.send(await collect(cfg))
+    } catch (e: any) {
+      await plugin.send({
+        error: String(e?.message || e).slice(0, 160),
+        ...(e?.code === "invalid_grant" ? { authExpired: true } : {}),
+      })
+    }
+  }
+
+  const monitorFn = async (plugin: MonitoringPluginBase): Promise<void> => {
+    await refreshFn(plugin)
+    refreshTimer = setInterval(() => refreshFn(plugin), (plugin.config as WorkspaceConfig)?.refreshInterval || 900000)
+  }
+
+  const teardownFn = async (): Promise<void> => {
+    if (refreshTimer) clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+
+  return createMonitoringPlugin(
+    "workspace",
+    "workspace",
+    "Google Workspace pooled storage (used of shared quota, by Drive, Gmail, Photos)",
+    async () => {},
+    monitorFn,
+    refreshFn,
+    teardownFn,
+  )
+}
+
+export default createWorkspacePlugin
