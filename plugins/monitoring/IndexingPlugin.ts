@@ -53,6 +53,12 @@ interface IndexingConfig extends SiteConfig {
   /** Search Console property: "sc-domain:example.com" or "https://example.com/". */
   site?: string
   sites?: SiteConfig[]
+  /**
+   * Report under a system of its own instead of the agent's: the tenant's
+   * clientstate URL and a file holding that system's key. Without it, reports
+   * go out through the agent's connector like every other plugin's.
+   */
+  report?: { apiUrl: string; systemKeyFile: string }
   stateFile?: string
   refreshInterval?: number
   timeout?: number
@@ -138,11 +144,36 @@ export function createIndexingPlugin() {
     }
   }
 
+  const sender = async (cfg: IndexingConfig, plugin: MonitoringPluginBase) => {
+    if (!cfg.report) return (data: any, uid?: string) => plugin.send(data, uid)
+    let key = ""
+    try { key = (await readFile(cfg.report.systemKeyFile, "utf8")).trim() } catch {}
+    // No key, no own system: report through the agent so the failure shows somewhere.
+    if (!key) {
+      console.error(`indexing: can't read ${cfg.report.systemKeyFile}, reporting through the agent instead`)
+      return (data: any, uid?: string) => plugin.send(data, uid)
+    }
+    return async (data: any, uid?: string) => {
+      try {
+        const res = await fetch(cfg.report!.apiUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-System-Key": key, "X-Unique-Id": uid || plugin.uniqueId, "X-Type": "indexing" },
+          body: JSON.stringify({ name: plugin.instanceName, ...data }),
+          signal: AbortSignal.timeout(15000),
+        })
+        if (!res.ok) console.error(`indexing: report rejected, HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 160)}`)
+      } catch (e: any) {
+        console.error("indexing: report failed:", e?.message || e)
+      }
+    }
+  }
+
   const refreshFn = async (plugin: MonitoringPluginBase): Promise<void> => {
     const cfg = (plugin.config || {}) as IndexingConfig
     const sites = sitesOf(cfg, plugin)
+    const send = await sender(cfg, plugin)
     if (!cfg.keyFile || !cfg.site) {
-      for (const s of sites) await plugin.send({ ...(s.name ? { name: s.name } : {}), error: "indexing plugin needs keyFile and site" }, s.uniqueId)
+      for (const s of sites) await send({ ...(s.name ? { name: s.name } : {}), error: "indexing plugin needs keyFile and site" }, s.uniqueId)
       return
     }
     const stateFile = cfg.stateFile || `${process.env.HOME || "."}/.config/daemonitor/indexing-state.json`
@@ -151,11 +182,11 @@ export function createIndexingPlugin() {
     const state: Record<string, string> = {}
     for (const s of sites) {
       try {
-        await plugin.send(await collectSite(cfg, s, state, seen), s.uniqueId)
+        await send(await collectSite(cfg, s, state, seen), s.uniqueId)
       } catch (e: any) {
         // Keep the failed site's clocks: its URLs didn't leave, the fetch did.
         for (const [u, t] of Object.entries(seen)) if (!(u in state)) state[u] = t
-        await plugin.send({
+        await send({
           ...(s.name ? { name: s.name } : {}),
           site: cfg.site,
           intervalMs: cfg.refreshInterval || 21_600_000,
