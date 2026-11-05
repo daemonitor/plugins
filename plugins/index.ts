@@ -19,6 +19,7 @@ import { createNagiosPlugin } from "./monitoring/NagiosPlugin.js"
 import { createTplinkSwitchPlugin } from "./monitoring/TplinkSwitchPlugin.js"
 import { createCostPlugin } from "./monitoring/CostPlugin.js"
 import { createSupabasePlugin } from "./monitoring/SupabasePlugin.js"
+import { createIndexingPlugin } from "./monitoring/IndexingPlugin.js"
 
 // In future, implement other plugin factory functions using the same pattern
 // import { createOSPlugin } from "./monitoring/OSPlugin.js"
@@ -51,6 +52,7 @@ export default {
     TplinkSwitch: createTplinkSwitchPlugin,
     Cost: createCostPlugin,
     Supabase: createSupabasePlugin,
+    Indexing: createIndexingPlugin,
     // CloudflarePlugin: createCloudflarePlugin,
     // EwelinkPlugin: createEwelinkPlugin,
     // MongoDBPlugin: createMongoDBPlugin,
