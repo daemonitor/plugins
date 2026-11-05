@@ -2,6 +2,7 @@ import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/Monitori
 import { exec } from "child_process"
 import { promisify } from "util"
 import { hostname } from "os"
+import { parseProcesses, PS_CMD, type ProcInfo } from "../../lib/processes.js"
 
 const execAsync = promisify(exec)
 const EXEC_OPTS = { maxBuffer: 32 * 1024 * 1024 }
@@ -26,6 +27,8 @@ interface Container {
   memPercent: number
   restarts: number
   exitCode: number
+  processes?: ProcInfo[]
+  network?: { rxBytes: number; txBytes: number; rxRate: number; txRate: number }
 }
 
 /** Parse LXD memory-limit strings like "1GB", "512MiB", "2GiB" to bytes. */
@@ -46,6 +49,8 @@ export function createLxcPlugin() {
   let lxcBin = "lxc"
   // cumulative CPU usage (ns) + wall clock (ms) per instance, for %-of-core calc
   const prevCpu = new Map<string, { usage: number; t: number }>()
+  // cumulative net bytes per instance, for a per-second rate (same shape as the os plugin)
+  const prevNet = new Map<string, { rx: number; tx: number; t: number }>()
 
   const setupFn = async (plugin: MonitoringPluginBase): Promise<void> => {
     lxcBin = plugin.config?.lxcBin || plugin.config?.bin || "lxc"
@@ -90,13 +95,32 @@ export function createLxcPlugin() {
         }
         prevCpu.set(name, { usage, t: now })
 
+        // Network: sum every non-loopback interface's counters from `lxc list`.
+        // No rate on the first poll or after a counter reset (restart).
+        let rx = 0, tx = 0
+        for (const n of Object.values<any>(st.network || {})) {
+          if (n?.type === "loopback") continue
+          rx += Number(n?.counters?.bytes_received) || 0
+          tx += Number(n?.counters?.bytes_sent) || 0
+        }
+        let network: Container["network"]
+        const pn = prevNet.get(name)
+        if (running && pn && now > pn.t && rx >= pn.rx && tx >= pn.tx) {
+          const dt = (now - pn.t) / 1000
+          network = { rxBytes: rx, txBytes: tx, rxRate: Math.round((rx - pn.rx) / dt), txRate: Math.round((tx - pn.tx) / dt) }
+        }
+        prevNet.set(name, { rx, tx, t: now })
+
         const mem = Number(st.memory?.usage) || 0
         const memLimit = limitToBytes(inst.config?.["limits.memory"] || inst.expanded_config?.["limits.memory"])
         const memPercent = memLimit ? Math.round((mem / memLimit) * 1000) / 10 : 0
 
+        // Display name: a user.daemonitor.name config key, else the instance name.
+        // The id stays the instance name, so renaming keeps the service and its history.
+        const label = inst.config?.["user.daemonitor.name"] || inst.expanded_config?.["user.daemonitor.name"] || name
         const container: Container = {
           id: name,
-          name,
+          name: label,
           service: "",
           image: inst.config?.["image.description"] || inst.type || "lxc",
           state: String(inst.status || "").toLowerCase(),
@@ -109,6 +133,18 @@ export function createLxcPlugin() {
           memPercent,
           restarts: 0,
           exitCode: 0,
+          network,
+        }
+
+        // Named service processes inside the container (nginx / php-fpm / db …),
+        // sampled from the host via `lxc exec` — no agent needed in the container.
+        if (running) {
+          try {
+            const { stdout: pout } = await execAsync(`${lxcBin} exec ${name} -- ${PS_CMD}`, { ...EXEC_OPTS, timeout: 8000 })
+            container.processes = parseProcesses(pout)
+          } catch {
+            container.processes = []
+          }
         }
 
         // Grouping: a user.daemonitor.group config key, else the host.
