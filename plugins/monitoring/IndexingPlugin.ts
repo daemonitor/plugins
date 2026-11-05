@@ -95,7 +95,7 @@ export function createIndexingPlugin() {
       }
     }
     return {
-      name: `Indexing · ${cfg.site}`,
+      name: (cfg as any).name || `Indexing · ${cfg.site}`,
       site: cfg.site,
       staleHours: cfg.staleHours || 72,
       intervalMs: cfg.refreshInterval || 21_600_000,
