@@ -21,6 +21,7 @@ const pexec = promisify(execFile)
 
 interface WpSite {
   name?: string // display label; defaults to the host dir name
+  id?: string // keeps the service id (wp-<id>) when the name changes; defaults to name
   path: string // absolute WordPress root (where wp-config.php lives), IN the
                // container's namespace when `lxc` is set
   url?: string // public URL; also passed as wp --url (fixes SERVER_NAME warnings)
@@ -322,10 +323,10 @@ export function createWordpressPlugin() {
       if (!site?.path) continue
       try {
         const data = await collectSite(site)
-        const uid = `wp-${slug(site.name || site.url || site.path)}`
+        const uid = `wp-${slug(site.id || site.name || site.url || site.path)}`
         await plugin.send(data, uid)
       } catch (e: any) {
-        const uid = `wp-${slug(site.name || site.url || site.path)}`
+        const uid = `wp-${slug(site.id || site.name || site.url || site.path)}`
         await plugin.send({ name: site.name || site.path, error: String(e?.message || e).slice(0, 160) }, uid)
       }
     }

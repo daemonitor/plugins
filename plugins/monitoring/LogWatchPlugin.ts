@@ -39,6 +39,7 @@ interface LogRule {
 
 interface LogSource {
   name?: string
+  id?: string // keeps the service id (log-<id>) when the name changes; defaults to name
   path: string // absolute path to the access log
   rules?: LogRule[]
   // Start reading from the beginning on first sight (replays history — off by
@@ -355,7 +356,7 @@ export function createLogWatchPlugin() {
     for (const source of sourcesOf(plugin)) {
       if (!source?.path) continue
       const label = source.name || path.basename(source.path)
-      const uid = `log-${slug(source.name || source.path)}`
+      const uid = `log-${slug(source.id || source.name || source.path)}`
       let st = states.get(source.path)
       if (!st) { st = { offset: 0, remainder: "", inited: false }; states.set(source.path, st) }
       try {
