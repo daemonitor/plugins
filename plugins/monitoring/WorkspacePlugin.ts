@@ -10,13 +10,28 @@ import { getJson, googleAccessToken, shiftDate } from "./AdsensePlugin.js"
 //
 // Google publishes the report a day or more late, so each poll walks back from
 // yesterday to the newest date that has data. `asOf` says which day it is.
-// A quota change in the Admin console shows here only once a report covers it.
 // The same day's users report lists each account's share, biggest first.
+//
+// The pool comes from the licenses assigned right now (seats x storage per
+// seat), not from the report, so a licence change shows within one poll. The
+// report's pool is days old: on 2026-11-05 it said 3.45 TB while the Admin
+// console already counted 19 TB. A SKU with no known size falls back to the
+// report's figure; `storagePerSeatGiB` sets one by SKU id.
 
 const API = "https://admin.googleapis.com/admin/reports/v1/usage/dates"
 const USERS_API = "https://admin.googleapis.com/admin/reports/v1/usage/users/all/dates"
 const USER_PARAMS = ["used_quota_in_mb", "drive_used_quota_in_mb", "gmail_used_quota_in_mb", "gplus_photos_used_quota_in_mb"]
+const LICENSES = "https://licensing.googleapis.com/apps/licensing/v1/product/Google-Apps/users"
 const LOOKBACK = 7
+const GiB = 1024 ** 3
+// Pooled storage each seat adds, in GiB (Google sells it in binary units).
+export const STORAGE_PER_SEAT: Record<string, number> = {
+  "1010020027": 30, // Business Starter
+  "1010020028": 2048, // Business Standard
+  "1010020025": 5120, // Business Plus
+  "1010020026": 5120, // Enterprise Standard
+  "1010020020": 5120, // Enterprise Plus
+}
 // ponytail: the biggest accounts only, so a large domain's report stays small.
 const MAX_USERS = 200
 
@@ -27,6 +42,8 @@ interface WorkspaceConfig {
   customerId?: string
   warnPct?: number
   critPct?: number
+  /** Storage per seat in GiB by SKU id, for a plan STORAGE_PER_SEAT doesn't know. */
+  storagePerSeatGiB?: Record<string, number>
   refreshInterval?: number
   timeout?: number
 }
@@ -74,6 +91,31 @@ export function summarize(u: Record<string, number>, asOf: string) {
   }
 }
 
+export interface Seats { sku: string; name: string; count: number }
+
+/** Licence assignments -> seat counts per SKU. */
+export function countSeats(items: any[]): Seats[] {
+  const by = new Map<string, Seats>()
+  for (const a of items) {
+    const sku = String(a?.skuId || "")
+    const s = by.get(sku) || { sku, name: String(a?.skuName || sku).replace(/^Google Workspace /, ""), count: 0 }
+    s.count++
+    by.set(sku, s)
+  }
+  return [...by.values()].sort((a, b) => b.count - a.count)
+}
+
+/** Seats -> pooled storage in bytes, or null when a SKU's size is unknown. */
+export function poolBytes(seats: Seats[], overrides: Record<string, number> = {}): number | null {
+  let total = 0
+  for (const s of seats) {
+    const gib = overrides[s.sku] ?? STORAGE_PER_SEAT[s.sku]
+    if (gib == null) return null
+    total += s.count * gib * GiB
+  }
+  return seats.length ? total : null
+}
+
 export function createWorkspacePlugin() {
   let refreshTimer: any = null
 
@@ -81,6 +123,22 @@ export function createWorkspacePlugin() {
     const timeout = cfg.timeout || 20000
     const auth = { headers: { Authorization: `Bearer ${await googleAccessToken(cfg, timeout)}` } }
     const today = new Date().toISOString().slice(0, 10)
+
+    // The pool as licensed right now. If this fails, the report's pool stands in.
+    let seats: Seats[] | undefined
+    try {
+      const items: any[] = []
+      let page = ""
+      do {
+        const q = new URLSearchParams({ customerId: cfg.customerId!, maxResults: "1000", ...(page ? { pageToken: page } : {}) })
+        const r = await getJson(`${LICENSES}?${q}`, auth, timeout)
+        items.push(...(r?.items || []))
+        page = r?.nextPageToken || ""
+      } while (page)
+      seats = countSeats(items)
+    } catch { /* report pool */ }
+    const licensed = seats ? poolBytes(seats, cfg.storagePerSeatGiB) : null
+
     for (let back = 1; back <= LOOKBACK; back++) {
       const date = shiftDate(today, -back)
       // No `parameters` filter: one misspelt name fails the whole call.
@@ -106,7 +164,12 @@ export function createWorkspacePlugin() {
         } while (page)
         users = all.sort((a, b) => b.bytes - a.bytes).slice(0, MAX_USERS)
       } catch { /* totals only */ }
-      return { name: "Workspace storage", warnPct: cfg.warnPct ?? 85, critPct: cfg.critPct ?? 95, ...summarize(u, date), users }
+      const s = summarize(u, date)
+      if (licensed) Object.assign(s, { totalBytes: licensed, usedPct: Math.round((s.usedBytes / licensed) * 1000) / 10 })
+      return {
+        name: "Workspace storage", warnPct: cfg.warnPct ?? 85, critPct: cfg.critPct ?? 95, ...s,
+        poolFrom: licensed ? "licenses" : "report", seats, users,
+      }
     }
     throw new Error(`no usage report in the last ${LOOKBACK} days`)
   }
