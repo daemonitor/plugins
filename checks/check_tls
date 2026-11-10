@@ -1,0 +1,53 @@
+#!/bin/sh
+# check_tls: Nagios check for a TLS service. Handshakes with SNI, verifies the chain against the
+# system CAs, optionally checks the server greeting, and warns before the certificate expires.
+#
+#   check_tls -H HOST -p PORT [-s imap|smtp|pop3|ftp] [-e GREETING] [-w DAYS] [-c DAYS] [-t SECONDS]
+#
+# -s does STARTTLS on a plain port first (143, 587). Without it the port is TLS from the first byte.
+# -e is a substring of the first line the server sends after the handshake ("* OK", "220").
+# Defaults: warn at 21 days left, critical at 7, 10 second timeout.
+# Written because check_tcp in monitoring-plugins 2.3.x drops --sni, and a proxy that picks its
+# certificate by name answers a nameless hello with alert 80. Needs openssl and timeout.
+
+warn=21 crit=7 tmo=10 starttls= expect=
+while getopts H:p:s:e:w:c:t: o; do
+	case $o in
+	H) host=$OPTARG ;; p) port=$OPTARG ;; s) starttls=$OPTARG ;; e) expect=$OPTARG ;;
+	w) warn=$OPTARG ;; c) crit=$OPTARG ;; t) tmo=$OPTARG ;;
+	*) echo "UNKNOWN - bad arguments"; exit 3 ;;
+	esac
+done
+[ -z "$host" ] || [ -z "$port" ] && { echo "UNKNOWN - needs -H and -p"; exit 3; }
+
+# stdin stays open for a second so the greeting arrives before s_client hangs up.
+out=$(sleep 1 | timeout "$tmo" openssl s_client -connect "$host:$port" -servername "$host" \
+	-verify_hostname "$host" -verify_return_error ${starttls:+-starttls "$starttls"} 2>&1)
+rc=$?
+[ $rc -eq 124 ] && { echo "CRITICAL - $host:$port timed out after ${tmo}s"; exit 2; }
+
+cert=$(printf '%s\n' "$out" | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')
+if [ -z "$cert" ]; then
+	echo "CRITICAL - $host:$port no TLS handshake: $(printf '%s\n' "$out" | grep -m1 -iE 'error|refused|alert|unknown' | cut -c1-120)"
+	exit 2
+fi
+verify=$(printf '%s\n' "$out" | grep -m1 'Verify return code' | sed 's/.*Verify return code: //')
+case $verify in
+"0 (ok)") ;;
+*) echo "CRITICAL - $host:$port certificate does not verify: $verify"; exit 2 ;;
+esac
+
+if [ -n "$expect" ] && ! printf '%s\n' "$out" | grep -qF -- "$expect"; then
+	echo "CRITICAL - $host:$port greeting has no \"$expect\""; exit 2
+fi
+
+end=$(printf '%s\n' "$cert" | openssl x509 -noout -enddate | cut -d= -f2)
+end_s=$(date -u -d "$end" +%s 2>/dev/null || date -u -j -f '%b %e %T %Y %Z' "$end" +%s)
+days=$(((end_s - $(date +%s)) / 86400))
+perf="| days_left=$days;$warn;$crit;0"
+msg="$host:$port TLS ok${starttls:+ (STARTTLS $starttls)}, certificate expires in $days days"
+
+if [ "$days" -lt "$crit" ]; then echo "CRITICAL - $msg $perf"; exit 2
+elif [ "$days" -lt "$warn" ]; then echo "WARNING - $msg $perf"; exit 1
+fi
+echo "OK - $msg $perf"; exit 0

@@ -1,0 +1,51 @@
+#!/bin/sh
+# check_d1_age: Nagios check for how old the newest timestamp in a Cloudflare D1 database is.
+# Run it from the nagios plugin. Mail flow, queue drains, cron writes: anything that stamps a row.
+#
+#   check_d1_age -a ACCOUNT_ID -d DATABASE_ID -q SQL -w SECONDS [-c SECONDS] [-u ms|s] [-l LABEL]
+#
+# SQL must return one row whose first column is an epoch (milliseconds with -u ms, the default).
+# Write it so it reads a few rows: EXPLAIN it first, because D1 bills and slows on rows read.
+# No -c means it never goes CRITICAL, for signals where quiet hours are normal.
+# The token comes from CLOUDFLARE_API_TOKEN (D1 Read is enough), or from the file in
+# CLOUDFLARE_API_TOKEN_FILE, so it stays out of the process list and the agent config.
+# Needs curl and jq.
+
+unit=ms label=newest crit=
+while getopts a:d:q:w:c:u:l: o; do
+	case $o in
+	a) account=$OPTARG ;; d) db=$OPTARG ;; q) sql=$OPTARG ;; w) warn=$OPTARG ;;
+	c) crit=$OPTARG ;; u) unit=$OPTARG ;; l) label=$OPTARG ;;
+	*) echo "UNKNOWN - bad arguments"; exit 3 ;;
+	esac
+done
+[ -z "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_API_TOKEN_FILE" ] && CLOUDFLARE_API_TOKEN=$(cat "$CLOUDFLARE_API_TOKEN_FILE" 2>/dev/null)
+if [ -z "$account" ] || [ -z "$db" ] || [ -z "$sql" ] || [ -z "$warn" ] || [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+	echo "UNKNOWN - needs -a, -d, -q, -w and CLOUDFLARE_API_TOKEN"; exit 3
+fi
+
+body=$(jq -nc --arg sql "$sql" '{sql: $sql}')
+res=$(curl -sS -m 20 -X POST "https://api.cloudflare.com/client/v4/accounts/$account/d1/database/$db/query" \
+	-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" -d "$body" 2>&1) || {
+	echo "UNKNOWN - D1 request failed: $res" | head -c 200; echo; exit 3
+}
+ts=$(printf '%s' "$res" | jq -r 'if .success then (.result[0].results[0] // {} | to_entries[0].value // empty) else empty end' 2>/dev/null)
+case $ts in
+'' | *[!0-9.]*)
+	echo "UNKNOWN - no timestamp from D1: $(printf '%s' "$res" | jq -rc '.errors // .' 2>/dev/null | head -c 160)"; exit 3 ;;
+esac
+
+now=$(date +%s)
+ts=${ts%.*}
+[ "$unit" = ms ] && ts=$((ts / 1000))
+age=$((now - ts))
+when=$(date -u -d "@$ts" +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -r "$ts" +%Y-%m-%dT%H:%MZ)
+human() { if [ "$1" -ge 3600 ]; then echo "$(($1 / 3600))h$(($1 % 3600 / 60))m"; else echo "$(($1 / 60))m"; fi; }
+perf="| age=${age}s;$warn;$crit;0"
+
+if [ -n "$crit" ] && [ "$age" -ge "$crit" ]; then
+	echo "CRITICAL - $label is $(human $age) old ($when) $perf"; exit 2
+elif [ "$age" -ge "$warn" ]; then
+	echo "WARNING - $label is $(human $age) old ($when) $perf"; exit 1
+fi
+echo "OK - $label is $(human $age) old ($when) $perf"; exit 0
