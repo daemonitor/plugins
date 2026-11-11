@@ -44,7 +44,8 @@ fi
 end=$(printf '%s\n' "$cert" | openssl x509 -noout -enddate | cut -d= -f2)
 end_s=$(date -u -d "$end" +%s 2>/dev/null || date -u -j -f '%b %e %T %Y %Z' "$end" +%s)
 days=$(((end_s - $(date +%s)) / 86400))
-perf="| days_left=$days;$warn;$crit;0"
+# "N:" is the Nagios range for "alert below N"; a bare N would mean above, and mark a healthy cert red.
+perf="| days_left=$days;$warn:;$crit:;0"
 msg="$host:$port TLS ok${starttls:+ (STARTTLS $starttls)}, certificate expires in $days days"
 
 if [ "$days" -lt "$crit" ]; then echo "CRITICAL - $msg $perf"; exit 2
