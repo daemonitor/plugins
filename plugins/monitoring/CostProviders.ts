@@ -189,6 +189,27 @@ const fastly: CostFetcher = async (cfg, _range, timeout) => {
   }
 }
 
+// Vultr: month-to-date only. /account carries the running total (USD), and
+// /billing/pending-charges splits it by line item. No daily data in the API.
+const vultr: CostFetcher = async (cfg, _range, timeout) => {
+  need(cfg, "apiKey")
+  const auth = { headers: { Authorization: `Bearer ${cfg.apiKey}` } }
+  const [{ account }, pending] = await Promise.all([
+    json("https://api.vultr.com/v2/account", auth, timeout),
+    json("https://api.vultr.com/v2/billing/pending-charges", auth, timeout),
+  ])
+  const by = new Map<string, number>()
+  for (const c of pending.pending_charges || []) {
+    const name = c.product || c.description || "item"
+    by.set(name, (by.get(name) || 0) + (Number(c.total) || 0))
+  }
+  return {
+    currency: "USD",
+    monthToDate: Math.abs(Number(account?.pending_charges) || 0),
+    breakdown: [...by].map(([name, amount]) => ({ name, amount })),
+  }
+}
+
 // Cloudflare: billable usage (alpha, PayGo usage only, not plan fees). Called
 // with no range: it then returns the current billing period, which sidesteps
 // the rule that a range must include the subscription's billing-anchor day.
@@ -361,5 +382,5 @@ const workspace: CostFetcher = async (cfg, { start, end }, timeout) => {
 }
 
 export const PROVIDERS: Record<string, CostFetcher> = {
-  openai, anthropic, aws, vercel, fastly, cloudflare, posthog, gcp, workspace, "google-ads": googleAds, "meta-ads": metaAds,
+  openai, anthropic, aws, vercel, fastly, vultr, cloudflare, posthog, gcp, workspace, "google-ads": googleAds, "meta-ads": metaAds,
 }
