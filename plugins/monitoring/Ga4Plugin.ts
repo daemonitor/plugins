@@ -1,5 +1,5 @@
 import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
-import { getJson, googleAccessToken, shiftDate, todayIn } from "./AdsensePlugin.js"
+import { failure, getJson, googleAccessToken, shiftDate, todayIn } from "./AdsensePlugin.js"
 
 // Google Analytics 4 overview across every account and property the Google
 // login can see.
@@ -270,10 +270,7 @@ export function createGa4Plugin() {
     try {
       await plugin.send(await collect(cfg))
     } catch (e: any) {
-      await plugin.send({
-        error: String(e?.message || e).slice(0, 160),
-        ...(e?.code === "invalid_grant" ? { authExpired: true } : {}),
-      })
+      await plugin.send(failure(e))
     }
   }
 

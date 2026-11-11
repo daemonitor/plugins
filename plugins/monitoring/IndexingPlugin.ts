@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
+import { isTransient } from "./AdsensePlugin.js"
 import {
   SCOPES, accessToken, inspectUrl, isStuck, parseKey, parseSitemap, parseSitemapIndex, urlMetadata,
   type Inspection, type NotifyMetadata,
@@ -191,7 +192,7 @@ export function createIndexingPlugin() {
           site: cfg.site,
           intervalMs: cfg.refreshInterval || 21_600_000,
           error: String(e?.message || e).slice(0, 160),
-          ...(e?.status === 401 || e?.status === 403 || e?.code === "invalid_grant" ? { authExpired: true } : {}),
+          ...(e?.status === 401 || e?.status === 403 || e?.code === "invalid_grant" ? { authExpired: true } : isTransient(e) ? { transient: true } : {}),
         }, s.uniqueId)
       }
     }

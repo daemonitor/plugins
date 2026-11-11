@@ -158,11 +158,33 @@ export async function getJson(url: string, init: RequestInit, timeout: number): 
   const body: any = await res.json().catch(() => ({}))
   if (!res.ok) {
     const e: any = new Error(body?.error_description || body?.error?.message || body?.error || `HTTP ${res.status}`)
+    e.status = res.status
     e.code = typeof body?.error === "string" ? body.error : body?.error?.status
     throw e
   }
   return body
 }
+
+/**
+ * Google's side, not ours: an outage (5xx, UNAVAILABLE), a rate limit (429,
+ * RESOURCE_EXHAUSTED), a timeout or a dropped connection. The next poll can fix
+ * it, so the server keeps the last good reading and warns. A bad token, a lost
+ * permission or a property that no longer exists is not transient.
+ */
+export function isTransient(e: any): boolean {
+  if (e?.name === "TimeoutError" || e?.name === "AbortError") return true
+  // fetch() itself failed: DNS, reset, refused.
+  if (e instanceof TypeError && /fetch failed|network/i.test(String(e.message))) return true
+  const status = Number(e?.status) || 0
+  if (status === 429 || (status >= 500 && status < 600)) return true
+  return ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED", "INTERNAL", "ABORTED"].includes(String(e?.code))
+}
+
+/** The body a Google plugin sends when a poll fails. */
+export const failure = (e: any) => ({
+  error: String(e?.message || e).slice(0, 160),
+  ...(e?.code === "invalid_grant" ? { authExpired: true } : isTransient(e) ? { transient: true } : {}),
+})
 
 /** Trade a refresh token for a one-hour access token. Shared with the ga4 plugin. */
 export async function googleAccessToken(
@@ -229,10 +251,7 @@ export function createAdsensePlugin() {
     } catch (e: any) {
       // invalid_grant = the refresh token was revoked or expired. Nothing the
       // next poll can fix, so it is flagged apart from a transient API error.
-      await plugin.send({
-        error: String(e?.message || e).slice(0, 160),
-        ...(e?.code === "invalid_grant" ? { authExpired: true } : {}),
-      })
+      await plugin.send(failure(e))
     }
   }
 

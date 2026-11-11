@@ -86,3 +86,27 @@ assert.equal(sites[1].today, 0)
 assert.deepEqual(summarizeSites(parseSiteReport({ headers: report.headers, rows: report.rows }), "2026-10-02"), []) // no DOMAIN_NAME column
 
 console.log("adsense checks passed")
+
+// A failed poll: Google's outage or rate limit is transient, a bad token or a
+// missing property is not. Run through getJson with fetch stubbed.
+{
+  const { getJson, failure } = await import("../plugins/monitoring/AdsensePlugin.ts")
+  const real = globalThis.fetch
+  const reply = (status: number, body: unknown) => { globalThis.fetch = (async () => new Response(JSON.stringify(body), { status })) as any }
+  const fail = async () => { try { await getJson("https://x.test", {}, 1000) } catch (e) { return failure(e) } throw new Error("no throw") }
+  reply(503, { error: { code: 503, message: "The service is currently unavailable.", status: "UNAVAILABLE" } })
+  assert.deepEqual(await fail(), { error: "The service is currently unavailable.", transient: true })
+  reply(429, { error: { code: 429, message: "Quota exceeded", status: "RESOURCE_EXHAUSTED" } })
+  assert.equal((await fail()).transient, true)
+  reply(400, { error: "invalid_grant", error_description: "Token has been expired or revoked." })
+  assert.deepEqual(await fail(), { error: "Token has been expired or revoked.", authExpired: true })
+  reply(403, { error: { code: 403, message: "User does not have sufficient permissions", status: "PERMISSION_DENIED" } })
+  assert.deepEqual(await fail(), { error: "User does not have sufficient permissions" })
+  reply(404, { error: { code: 404, message: "Property not found", status: "NOT_FOUND" } })
+  assert.equal("transient" in (await fail()), false)
+  globalThis.fetch = (async () => { throw new TypeError("fetch failed") }) as any
+  assert.equal((await fail()).transient, true)
+  const t = new Error("timed out"); t.name = "TimeoutError"
+  assert.equal(failure(t).transient, true)
+  globalThis.fetch = real
+}

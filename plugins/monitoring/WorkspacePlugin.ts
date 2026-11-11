@@ -1,5 +1,5 @@
 import { createMonitoringPlugin, MonitoringPluginBase } from "../../lib/MonitoringPlugin.js"
-import { getJson, googleAccessToken, shiftDate } from "./AdsensePlugin.js"
+import { failure, getJson, googleAccessToken, shiftDate } from "./AdsensePlugin.js"
 
 // Google Workspace pooled storage: used against the domain's shared quota,
 // split by Drive, Gmail and Photos, from the Admin SDK customer usage report.
@@ -183,10 +183,7 @@ export function createWorkspacePlugin() {
     try {
       await plugin.send(await collect(cfg))
     } catch (e: any) {
-      await plugin.send({
-        error: String(e?.message || e).slice(0, 160),
-        ...(e?.code === "invalid_grant" ? { authExpired: true } : {}),
-      })
+      await plugin.send(failure(e))
     }
   }
 
