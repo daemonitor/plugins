@@ -37,5 +37,6 @@ assert.equal(cameraId({ name: "Lobby", url: "http://192.168.1.20/ISAPI/Streaming
 assert.notEqual(cameraId({ url: "http://192.168.1.20/ISAPI/Streaming/channels/201/picture" }), cameraId({ url: "http://192.168.1.20/ISAPI/Streaming/channels/101/picture" }))
 assert.equal(cameraId({ driver: "onvif", host: "192.168.1.21:8000", profile: 1 }), "camera-192-168-1-21-8000-p1")
 assert.equal(cameraId({ id: "front-door", url: "http://x/y" }), "front-door")
+assert.notEqual(cameraId({ url: "http://192.168.1.30/cgi-bin/snapshot.cgi?channel=1" }), cameraId({ url: "http://192.168.1.30/cgi-bin/snapshot.cgi?channel=2" }))
 
 console.log("camera check: ok")

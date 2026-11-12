@@ -163,7 +163,8 @@ export function cameraId(cam: CameraConfig): string {
   if (cam.id) return cam.id
   if (cam.driver === "onvif") return `camera-${slug(`${cam.host}-p${cam.profile ?? 0}`)}`
   const u = new URL(String(cam.url))
-  return `camera-${slug(u.host + u.pathname)}`
+  // The query counts: Dahua and others pick the channel there (snapshot.cgi?channel=2).
+  return `camera-${slug(u.host + u.pathname + u.search)}`
 }
 
 /** The connector method that uploads a frame. Clients before it existed lack it. */
