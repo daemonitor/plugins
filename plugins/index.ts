@@ -21,6 +21,7 @@ import { createCostPlugin } from "./monitoring/CostPlugin.js"
 import { createSupabasePlugin } from "./monitoring/SupabasePlugin.js"
 import { createIndexingPlugin } from "./monitoring/IndexingPlugin.js"
 import { createWorkspacePlugin } from "./monitoring/WorkspacePlugin.js"
+import { createCameraPlugin } from "./monitoring/CameraPlugin.js"
 
 // In future, implement other plugin factory functions using the same pattern
 // import { createOSPlugin } from "./monitoring/OSPlugin.js"
@@ -55,6 +56,7 @@ export default {
     Supabase: createSupabasePlugin,
     Indexing: createIndexingPlugin,
     Workspace: createWorkspacePlugin,
+    Camera: createCameraPlugin,
     // CloudflarePlugin: createCloudflarePlugin,
     // EwelinkPlugin: createEwelinkPlugin,
     // MongoDBPlugin: createMongoDBPlugin,
