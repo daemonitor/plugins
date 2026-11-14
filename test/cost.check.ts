@@ -95,3 +95,12 @@ assert.equal(wo.projected, 120)
 globalThis.fetch = realFetch
 
 console.log("cost checks passed")
+
+// Cloudflare spend policies: cents to dollars, provider verdict passed through.
+{
+  const { cfLimit } = await import("../plugins/monitoring/CostProviders.ts")
+  assert.deepEqual(cfLimit({ name: "Workers cap", product_id: "workers", action: "usage_block", threshold_cents: 5000, current_state: { balance_cents: 5012, status: "limit_reached", billing_period_end: "2026-12-15T00:00:00Z" } }),
+    { name: "Workers cap", product: "workers", blocks: true, threshold: 50, spent: 50.12, status: "limit_reached", periodEnd: "2026-12-15T00:00:00Z" })
+  assert.deepEqual(cfLimit({ product_id: "durable_objects", action: "notification", threshold_cents: 100 }),
+    { name: "durable_objects", product: "durable_objects", blocks: false, threshold: 1, status: "unavailable" })
+}

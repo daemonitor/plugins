@@ -22,6 +22,20 @@ export interface CostFetch {
   monthToDate?: number
   /** Month-to-date spend split by line item (model, service, campaign), biggest first. */
   breakdown?: { name: string; amount: number }[]
+  /** Spend limits the provider enforces itself (Cloudflare spend policies). */
+  limits?: CostLimit[]
+}
+
+/** A provider-side spend limit. `blocks` = the provider stops the product at `threshold`. */
+export interface CostLimit {
+  name: string
+  product: string
+  blocks: boolean
+  threshold: number
+  spent?: number
+  /** Provider's own verdict, e.g. below_limit, limit_reached, unavailable. */
+  status: string
+  periodEnd?: string
 }
 
 export interface CostProviderConfig {
@@ -120,6 +134,7 @@ export async function collectCost(p: CostProviderConfig, today = todayUtc()) {
     ...summarizeCost(f, today),
     breakdown: (f.breakdown || []).filter((b) => b.amount).sort((a, b) => b.amount - a.amount).slice(0, 12)
       .map((b) => ({ name: b.name, amount: round2(b.amount) })),
+    ...(f.limits?.length ? { limits: f.limits } : {}),
   }
 }
 
