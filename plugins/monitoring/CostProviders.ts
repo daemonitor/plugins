@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto"
 import { googleAccessToken } from "./AdsensePlugin.js"
-import type { CostFetch, CostProviderConfig, CostDay } from "./CostPlugin.js"
+import type { CostFetch, CostProviderConfig, CostDay, CostLimit } from "./CostPlugin.js"
 
 // One fetcher per billing API. Each takes the provider's config block and a UTC
 // date range (start..end, both inclusive, YYYY-MM-DD) and returns daily amounts
@@ -216,13 +216,45 @@ const vultr: CostFetcher = async (cfg, _range, timeout) => {
 const cloudflare: CostFetcher = async (cfg, { end }, timeout) => {
   need(cfg, "token", "accountId")
   const t = tally(end.slice(0, 7))
-  const body = await json(`https://api.cloudflare.com/client/v4/accounts/${cfg.accountId}/billable-usage`, { headers: { Authorization: `Bearer ${cfg.token}` } }, timeout)
+  const acct = `https://api.cloudflare.com/client/v4/accounts/${cfg.accountId}`
+  const init = { headers: { Authorization: `Bearer ${cfg.token}` } }
+  const [body, limits] = await Promise.all([
+    json(`${acct}/billable-usage`, init, timeout),
+    cloudflareLimits(acct, init, timeout),
+  ])
   let currency = "USD"
   for (const r of body.result || []) {
     if (r.BillingCurrency) currency = r.BillingCurrency
     t.add(String(r.ChargePeriodStart || "").slice(0, 10), Number(r.BilledCost) || 0, r.ServiceName || r.ChargeDescription || undefined)
   }
-  return { currency, days: t.days(), breakdown: t.breakdown() }
+  return { currency, days: t.days(), breakdown: t.breakdown(), ...(limits.length ? { limits } : {}) }
+}
+
+// Spend policies (beta, PayGo, Workers and Durable Objects only, 2026-11-13):
+// per-product limits that email (`notification`) or stop the product
+// (`usage_block`). Optional: a token without Billing access or an account with
+// no policies leaves the spend row as it was. Cents converted to dollars here.
+async function cloudflareLimits(acct: string, init: RequestInit, timeout: number): Promise<CostLimit[]> {
+  try {
+    const body = await json(`${acct}/billing/spend-policies`, init, timeout)
+    return (body.result || []).filter((p: any) => p.enabled).map((p: any) => cfLimit(p))
+  } catch (e) {
+    if (e instanceof HttpError && [403, 404].includes(e.status)) return []
+    throw e
+  }
+}
+
+export function cfLimit(p: any): CostLimit {
+  const st = p.current_state || {}
+  return {
+    name: p.name || p.product_id,
+    product: String(p.product_id || ""),
+    blocks: p.action === "usage_block",
+    threshold: (Number(p.threshold_cents) || 0) / 100,
+    ...(st.balance_cents != null ? { spent: (Number(st.balance_cents) || 0) / 100 } : {}),
+    status: String(st.status || "unavailable"),
+    ...(st.billing_period_end ? { periodEnd: st.billing_period_end } : {}),
+  }
 }
 
 // PostHog: daily spend series, personal API key with billing:read. End is INCLUSIVE.
