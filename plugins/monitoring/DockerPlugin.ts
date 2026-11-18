@@ -322,6 +322,8 @@ export function createDockerPlugin() {
   let refreshTimer: any = null
   let available = false
   let dockerBin = "docker"
+  /** Projects sent last round, so one that disappears can be reported removed. */
+  let lastSent = new Set<string>()
 
   const setupFn = async (plugin: MonitoringPluginBase): Promise<void> => {
     dockerBin = plugin.config?.dockerBin || plugin.config?.bin || "docker"
@@ -371,6 +373,14 @@ export function createDockerPlugin() {
         }
         await plugin.send(payload, `docker-${project}`)
       }
+      // Gone from a complete `docker ps -a` means removed (a stopped container
+      // still lists), e.g. a CI job's service container. Say so once, so the
+      // server drops the row instead of painting it OFFLINE until it is reaped.
+      // A failed listing throws above and never gets here.
+      for (const project of lastSent) {
+        if (!groups.has(project)) await plugin.send({ name: project, project, engine: "docker", host, removed: true, timestamp: Date.now() }, `docker-${project}`)
+      }
+      lastSent = new Set(groups.keys())
     } catch (err) {
       console.error("docker: refresh error:", (err as Error).message)
     }
